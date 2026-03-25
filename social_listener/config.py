@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -42,6 +43,8 @@ def _env_int(name: str, default: int) -> int:
 class Settings:
     base_dir: Path
     db_path: Path
+    database_url: str | None
+    database_backend: str
     owned_youtube_channels_path: Path
     secret_key: str
     enable_demo_data: bool
@@ -57,6 +60,9 @@ class Settings:
 
 def load_settings() -> Settings:
     _load_dotenv()
+    database_url = (os.getenv("APP_DATABASE_URL") or os.getenv("DATABASE_URL") or "").strip() or None
+    parsed_scheme = (urlparse(database_url).scheme if database_url else "").lower()
+    database_backend = "postgres" if parsed_scheme in {"postgres", "postgresql"} else "sqlite"
     db_relative = os.getenv("APP_DB_PATH", "data/app.db")
     db_path = (BASE_DIR / db_relative).resolve()
     owned_youtube_channels_relative = os.getenv("APP_OWNED_YOUTUBE_CHANNELS_PATH", "data/owned_youtube_channels.json")
@@ -64,6 +70,8 @@ def load_settings() -> Settings:
     return Settings(
         base_dir=BASE_DIR,
         db_path=db_path,
+        database_url=database_url,
+        database_backend=database_backend,
         owned_youtube_channels_path=owned_youtube_channels_path,
         secret_key=os.getenv("APP_SECRET_KEY", "dev-secret-key"),
         enable_demo_data=_env_bool("APP_ENABLE_DEMO_DATA", True),

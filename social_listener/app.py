@@ -1,6 +1,4 @@
 from __future__ import annotations
-
-import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -8,7 +6,7 @@ from flask import Flask, jsonify, render_template, request
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from .config import load_settings
-from .db import close_db, init_schema
+from .db import INTEGRITY_ERRORS, close_db, init_schema
 from .repository import (
     create_brand_profile,
     ensure_default_brand_profiles,
@@ -97,7 +95,7 @@ def create_app() -> Flask:
                 requested_from=requested_from,
                 requested_to=requested_to,
             )
-        except sqlite3.IntegrityError:
+        except INTEGRITY_ERRORS:
             return jsonify({"error": "Bu marka adi zaten var."}), 409
         return jsonify(brand), 201
 
@@ -123,7 +121,7 @@ def create_app() -> Flask:
                 requested_from=requested_from,
                 requested_to=requested_to,
             )
-        except sqlite3.IntegrityError:
+        except INTEGRITY_ERRORS:
             return jsonify({"error": "Bu marka adi zaten var."}), 409
         if brand is None:
             return jsonify({"error": "Marka bulunamadi."}), 404

@@ -188,7 +188,7 @@ def create_brand_profile(
 ) -> dict[str, object]:
     db = get_db()
     now = utcnow_iso()
-    cursor = db.execute(
+    brand_id = db.insert_and_get_id(
         """
         INSERT INTO brand_profiles (
             name,
@@ -212,7 +212,7 @@ def create_brand_profile(
         ),
     )
     db.commit()
-    return get_brand_profile(int(cursor.lastrowid)) or {}
+    return get_brand_profile(brand_id) or {}
 
 
 def update_brand_profile(
@@ -296,7 +296,7 @@ def log_query(raw_query: str, normalized_terms: list[str], platforms: list[str],
 
 def start_collection_run(raw_query: str, platforms: list[str], requested_from: str | None, requested_to: str | None) -> int:
     db = get_db()
-    cursor = db.execute(
+    run_id = db.insert_and_get_id(
         """
         INSERT INTO collection_runs (raw_query, platforms_json, requested_from, requested_to, status, warnings_json, summary_json, started_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -313,7 +313,7 @@ def start_collection_run(raw_query: str, platforms: list[str], requested_from: s
         ),
     )
     db.commit()
-    return int(cursor.lastrowid)
+    return run_id
 
 
 def finish_collection_run(run_id: int, status: str, result_count: int, warnings: list[str], summary: dict[str, object]) -> None:
@@ -345,7 +345,7 @@ def set_item_read_state(item_id: int, is_read: bool) -> dict[str, object] | None
         SET is_read = ?, read_at = ?
         WHERE id = ?
         """,
-        (1 if is_read else 0, read_at, item_id),
+        (is_read, read_at, item_id),
     )
     db.commit()
     row = db.execute(

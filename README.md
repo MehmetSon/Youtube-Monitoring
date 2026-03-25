@@ -5,7 +5,7 @@ Web tabanli bir sosyal dinleme prototipi.
 Bu surum:
 
 - Flask tabanli bir web arayuzu sunar
-- SQLite ile bulunan icerikleri cache eder
+- SQLite veya PostgreSQL ile bulunan icerikleri cache eder
 - Tekrarlanan aramalarda daha once yakalanan sonuclari DB'den gosterir
 - YouTube icin gercek API ile video ve yorum toplamayi destekler
 - Facebook, Instagram ve LinkedIn icin adaptor/fallback yapisi sunar
@@ -29,6 +29,7 @@ Ardindan tarayicida `http://127.0.0.1:5000` adresini acin.
 - `APP_HOST`: local calistirmada bind edilecek host
 - `APP_PORT`: `PORT` yoksa local calistirmada kullanilacak port
 - `APP_ENABLE_DEMO_DATA`: `true` ise gercek adaptor yoksa demo veri kullanilir
+- `APP_DATABASE_URL`: verilirse uygulama otomatik PostgreSQL moduna gecer
 - `APP_DB_PATH`: SQLite dosya yolu
 - `APP_OWNED_YOUTUBE_CHANNELS_PATH`: owned YouTube kanallarinin JSON dosya yolu
 - `APP_TARGET_LANGUAGE`: hedef dil kodu, varsayilan `tr`
@@ -92,7 +93,7 @@ Varsayilan kanal listesi su dosyada tutulur:
 
 Bu dosyaya yeni marka ve kanal ekleyebilirsiniz.
 
-## Canliya alma
+## Ucretsiz canliya alma
 
 Projeyi Render uzerinde tek tikta ayaga kaldiracak dosyalar hazir:
 
@@ -101,29 +102,43 @@ Projeyi Render uzerinde tek tikta ayaga kaldiracak dosyalar hazir:
 - [Procfile](/Users/mehmetkabak/Documents/New%20project/Procfile)
 - [wsgi.py](/Users/mehmetkabak/Documents/New%20project/wsgi.py)
 
-Bu surum SQLite kullandigi icin en guvenli production modeli:
+Bu proje ucretsiz canli kullanim icin su mimariyla hazir:
 
-- tek web instance
-- persistent disk
+- Render Free Web Service
+- Supabase Free PostgreSQL
 - Gunicorn ile servis etme
 
-### Render ile yayinlama
+### 1. Supabase ucretsiz veritabani olusturma
+
+1. [Supabase](https://supabase.com/) hesabinda yeni bir proje acin.
+2. Proje acildiktan sonra `Connect` butonuna basin.
+3. Connection string olarak pooler adresini alin.
+4. Bu adresi bir yere kaydedin; Render'a `APP_DATABASE_URL` olarak girecegiz.
+
+Not: Supabase dokumani, baglanti bilgisini `Connect` ekranindan almanizi ve pooler modlarini kullanmanizi oneriyor. Ayrica transaction mode prepared statements desteklemez; uygulama bu uyumsuzlugu onlemek icin `prepare_threshold=None` ile baglanir. Kaynaklar:
+
+- [Supabase connection strings](https://supabase.com/docs/guides/database/connecting-to-postgres/serverless-drivers)
+- [Supabase disabling prepared statements](https://supabase.com/docs/guides/troubleshooting/disabling-prepared-statements-qL8lEL)
+
+### 2. Render ile yayinlama
 
 1. Projeyi GitHub repo'suna push edin.
 2. Render Dashboard'da `New +` > `Blueprint` secin.
 3. Repository'i baglayin; Render kokteki `render.yaml` dosyasini otomatik okuyacak.
-4. Ilk kurulum sirasinda `YOUTUBE_API_KEY` degeri sorulacak; anahtarinizi girin.
+4. Kurulum sirasinda su alanlari girin:
+   - `APP_DATABASE_URL`: Supabase connection string
+   - `YOUTUBE_API_KEY`: YouTube anahtariniz
 5. Deploy tamamlaninca uygulama `.onrender.com` adresinden acilacak.
 
 ### Render'da ayarlanacak kritik degerler
 
 - `APP_SECRET_KEY`: Render blueprint bunu otomatik uretir
 - `APP_ENABLE_DEMO_DATA=false`
-- `APP_DB_PATH=/var/data/app.db`
+- `APP_DATABASE_URL=postgresql://...`
 - `WEB_CONCURRENCY=1`
 - `GUNICORN_THREADS=4`
 
-SQLite kullandigimiz icin worker ve instance sayisini dusuk tuttum. Bu, dosya tabanli veritabaninda kilitlenme riskini azaltir. Uygulama buyurse bir sonraki dogru adim PostgreSQL'e gecmek olur.
+Render'in resmi ucretsiz web service dokumanina gore free servisler 15 dakika idle kalinca uyur ve local filesystem kalici degildir. Bu nedenle SQLite yerine Supabase Postgres kullaniyoruz. Kaynak: [Render Deploy for Free](https://render.com/docs/free)
 
 ### Yerelde production benzeri calistirma
 
