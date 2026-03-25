@@ -101,10 +101,6 @@ def _brand_row_to_dict(row: object | None) -> dict[str, object] | None:
 
 def ensure_default_brand_profiles() -> None:
     db = get_db()
-    row = db.execute("SELECT COUNT(*) AS total FROM brand_profiles").fetchone()
-    if row is not None and int(row["total"]) > 0:
-        return
-
     now = utcnow_iso()
     for brand in DEFAULT_BRAND_PROFILES:
         db.execute(
@@ -119,6 +115,7 @@ def ensure_default_brand_profiles() -> None:
                 updated_at
             )
             VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(name) DO NOTHING
             """,
             (
                 brand["name"],
