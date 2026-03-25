@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -33,6 +33,21 @@ def _env_int(name: str, default: int) -> int:
     raw = os.getenv(name)
     if raw is None:
         return default
+
+
+def _normalize_database_url(raw_value: str | None) -> str | None:
+    if not raw_value:
+        return None
+
+    parsed = urlparse(raw_value.strip())
+    if parsed.scheme.lower() not in {"postgres", "postgresql"}:
+        return raw_value.strip()
+
+    params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    params.setdefault("sslmode", "require")
+    params.setdefault("connect_timeout", "10")
+    params.setdefault("application_name", "social-listener")
+    return urlunparse(parsed._replace(query=urlencode(params)))
     try:
         return int(raw.strip())
     except ValueError:
@@ -60,7 +75,7 @@ class Settings:
 
 def load_settings() -> Settings:
     _load_dotenv()
-    database_url = (os.getenv("APP_DATABASE_URL") or os.getenv("DATABASE_URL") or "").strip() or None
+    database_url = _normalize_database_url((os.getenv("APP_DATABASE_URL") or os.getenv("DATABASE_URL") or "").strip() or None)
     parsed_scheme = (urlparse(database_url).scheme if database_url else "").lower()
     database_backend = "postgres" if parsed_scheme in {"postgres", "postgresql"} else "sqlite"
     db_relative = os.getenv("APP_DB_PATH", "data/app.db")
