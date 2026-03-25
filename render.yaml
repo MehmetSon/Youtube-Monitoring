@@ -1,0 +1,50 @@
+services:
+  - type: web
+    name: social-listener
+    runtime: python
+    plan: starter
+    region: frankfurt
+    numInstances: 1
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --config gunicorn.conf.py wsgi:app
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    disk:
+      name: data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.10
+      - key: APP_SECRET_KEY
+        generateValue: true
+      - key: APP_DEBUG
+        value: "false"
+      - key: APP_ENABLE_DEMO_DATA
+        value: "false"
+      - key: APP_DB_PATH
+        value: /var/data/app.db
+      - key: APP_OWNED_YOUTUBE_CHANNELS_PATH
+        value: data/owned_youtube_channels.json
+      - key: APP_TARGET_LANGUAGE
+        value: tr
+      - key: APP_TARGET_REGION
+        value: TR
+      - key: APP_STRICT_LANGUAGE_FILTER
+        value: "true"
+      - key: WEB_CONCURRENCY
+        value: "1"
+      - key: GUNICORN_THREADS
+        value: "4"
+      - key: GUNICORN_TIMEOUT
+        value: "120"
+      - key: YOUTUBE_MAX_RESULTS
+        value: "50"
+      - key: YOUTUBE_MAX_PAGES
+        value: "3"
+      - key: YOUTUBE_FETCH_COMMENTS
+        value: "true"
+      - key: YOUTUBE_COMMENT_THREADS_PER_VIDEO
+        value: "5"
+      - key: YOUTUBE_API_KEY
+        sync: false

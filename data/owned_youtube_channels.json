@@ -1,0 +1,24 @@
+{
+  "brands": [
+    {
+      "brand": "carrefoursa",
+      "aliases": ["carrefoursa", "karfur", "carrefur"],
+      "channels": [
+        {
+          "channel_id": "UCGsFWBIV1mQBmOl919Q606w",
+          "title": "CarrefourSA"
+        }
+      ]
+    },
+    {
+      "brand": "trendyol",
+      "aliases": ["trendyol"],
+      "channels": [
+        {
+          "channel_id": "UCWUkAPLGDjfsH-_LCEOGOEQ",
+          "title": "Trendyol"
+        }
+      ]
+    }
+  ]
+}

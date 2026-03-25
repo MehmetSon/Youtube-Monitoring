@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Signal Desk</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='20260325b') }}">
+  </head>
+  <body>
+    <main class="workspace-shell">
+      <aside class="sidebar">
+        <div class="sidebar-top">
+          <label class="sidebar-search">
+            <input id="brand-filter-input" type="search" placeholder="Marka ara">
+          </label>
+
+          <form id="brand-create-form" class="brand-create-card">
+            <p class="sidebar-title">Yeni Marka</p>
+            <label class="sidebar-field">
+              <span>Marka adi</span>
+              <input id="new-brand-name" type="text" placeholder="Ornek: CarrefourSA">
+            </label>
+            <label class="sidebar-field">
+              <span>Varsayilan filtre</span>
+              <textarea id="new-brand-query" rows="3" placeholder="ornek: carrefoursa, karfur, carrefur"></textarea>
+            </label>
+            <button id="create-brand" type="submit" class="primary sidebar-create-button">Marka ekle</button>
+          </form>
+        </div>
+
+        <section class="brand-list-shell">
+          <div class="sidebar-section-head">
+            <span>Markalar</span>
+            <strong id="brand-count">0</strong>
+          </div>
+          <div id="brand-list" class="brand-list">
+            <article class="brand-empty">Markalar yukleniyor...</article>
+          </div>
+        </section>
+      </aside>
+
+      <section class="workspace-main">
+        <header class="workspace-header">
+          <div>
+            <p class="eyebrow">Brand Workspace</p>
+            <h1 id="active-brand-name">Marka secin</h1>
+            <p id="active-brand-subtitle" class="lede">
+              Sol taraftan bir marka secildiginde kayitli filtreleri otomatik yuklenir ve sonuclar gelir.
+            </p>
+          </div>
+
+          <div class="workspace-header-actions">
+            <div class="status-chip {{ 'status-demo' if demo_enabled else 'status-live' }}">
+              {{ 'Demo fallback aktif' if demo_enabled else 'Sadece gercek connector' }}
+            </div>
+            <button id="refresh-brand" type="button" class="secondary">Simdi tara</button>
+          </div>
+        </header>
+
+        <section id="filter-panel" class="filter-panel">
+          <div class="filter-panel-head">
+            <div>
+              <p class="panel-kicker">Filters</p>
+              <h2>Aktif marka filtresi</h2>
+            </div>
+
+            <div class="range-shortcuts">
+              <button type="button" class="range-chip" data-range-days="1">1G</button>
+              <button type="button" class="range-chip" data-range-days="7">7G</button>
+              <button type="button" class="range-chip" data-range-days="30">30G</button>
+              <button type="button" class="range-chip" data-range-clear="true">Temizle</button>
+            </div>
+          </div>
+
+          <form id="search-form">
+            <label class="field">
+              <span>Kayitli filtre</span>
+              <textarea id="query" name="query" rows="3" placeholder="ornek: carrefoursa, karfur, carrefur"></textarea>
+            </label>
+
+            <div class="field-grid">
+              <label class="field">
+                <span>Baslangic</span>
+                <input id="from" name="from" type="datetime-local">
+              </label>
+              <label class="field">
+                <span>Bitis</span>
+                <input id="to" name="to" type="datetime-local">
+              </label>
+            </div>
+
+            <div class="platforms">
+              <label><input type="checkbox" name="platform" value="facebook"> Facebook</label>
+              <label><input type="checkbox" name="platform" value="instagram"> Instagram</label>
+              <label><input type="checkbox" name="platform" value="youtube"> YouTube</label>
+              <label><input type="checkbox" name="platform" value="linkedin"> LinkedIn</label>
+            </div>
+
+            <div class="actions">
+              <button type="submit" class="primary">Filtreyi kaydet ve guncelle</button>
+              <button type="button" id="search-cache" class="secondary">Sadece kayitli veriyi goster</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="summary-strip" id="summary-strip">
+          <div class="metric">
+            <span class="metric-label">Bulunan kayit</span>
+            <strong id="result-count">0</strong>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Kaynaklar</span>
+            <strong id="platform-count">0</strong>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Son durum</span>
+            <strong id="status-text">Hazir</strong>
+          </div>
+        </section>
+
+        <section class="warnings" id="warnings"></section>
+
+        <section id="results-section" class="results">
+          <div class="results-head">
+            <h2>Sonuclar</h2>
+            <p id="term-pill" class="term-pill">Henuz arama calismadi.</p>
+          </div>
+          <div id="results-list" class="results-list">
+            <article class="empty-state">
+              <p>Bir marka secildiginde sonuclar burada listelenecek.</p>
+            </article>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script src="{{ url_for('static', filename='app.js', v='20260325b') }}" defer></script>
+  </body>
+</html>
