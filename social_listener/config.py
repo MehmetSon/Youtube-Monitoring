@@ -33,6 +33,10 @@ def _env_int(name: str, default: int) -> int:
     raw = os.getenv(name)
     if raw is None:
         return default
+    try:
+        return int(raw.strip())
+    except ValueError:
+        return default
 
 
 def _normalize_database_url(raw_value: str | None) -> str | None:
@@ -48,10 +52,6 @@ def _normalize_database_url(raw_value: str | None) -> str | None:
     params.setdefault("connect_timeout", "10")
     params.setdefault("application_name", "social-listener")
     return urlunparse(parsed._replace(query=urlencode(params)))
-    try:
-        return int(raw.strip())
-    except ValueError:
-        return default
 
 
 @dataclass(frozen=True)

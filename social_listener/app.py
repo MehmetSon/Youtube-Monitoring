@@ -1,4 +1,7 @@
 from __future__ import annotations
+
+import logging
+from threading import Lock
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -56,12 +59,33 @@ def create_app() -> Flask:
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
     app.config["SETTINGS"] = settings
     app.secret_key = settings.secret_key
-
-    with app.app_context():
-        init_schema()
-        ensure_default_brand_profiles()
+    app.logger.setLevel(logging.INFO)
+    init_lock = Lock()
+    init_state = {"ready": False}
 
     app.teardown_appcontext(close_db)
+
+    def ensure_data_store_ready() -> None:
+        if init_state["ready"]:
+            return
+
+        with init_lock:
+            if init_state["ready"]:
+                return
+            with app.app_context():
+                init_schema()
+                ensure_default_brand_profiles()
+            init_state["ready"] = True
+
+    @app.before_request
+    def initialize_data_store_if_needed():
+        if request.path in {"/", "/health"} or request.path.startswith("/static/"):
+            return None
+        try:
+            ensure_data_store_ready()
+        except Exception:  # pragma: no cover - runtime safety
+            app.logger.exception("Veritabani hazirlanamadi.")
+            return jsonify({"error": "Veritabani hazirlanamadi. Lutfen biraz sonra tekrar deneyin."}), 503
 
     @app.get("/")
     def index() -> str:
