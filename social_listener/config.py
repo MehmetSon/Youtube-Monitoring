@@ -95,7 +95,7 @@ def load_settings() -> Settings:
         strict_language_filter=_env_bool("APP_STRICT_LANGUAGE_FILTER", True),
         youtube_api_key=os.getenv("YOUTUBE_API_KEY") or None,
         youtube_max_results=_env_int("YOUTUBE_MAX_RESULTS", 12),
-        youtube_max_pages=_env_int("YOUTUBE_MAX_PAGES", 3),
-        youtube_fetch_comments=_env_bool("YOUTUBE_FETCH_COMMENTS", True),
-        youtube_comment_threads_per_video=_env_int("YOUTUBE_COMMENT_THREADS_PER_VIDEO", 5),
+        youtube_max_pages=_env_int("YOUTUBE_MAX_PAGES", 1),
+        youtube_fetch_comments=_env_bool("YOUTUBE_FETCH_COMMENTS", False),
+        youtube_comment_threads_per_video=_env_int("YOUTUBE_COMMENT_THREADS_PER_VIDEO", 0),
     )

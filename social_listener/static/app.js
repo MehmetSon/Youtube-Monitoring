@@ -619,9 +619,12 @@ async function activateBrand(brandId, { refresh = true } = {}) {
   try {
     await searchBrandProfile(brand, { brandId: brand.id, token });
     if (refresh) {
-      statusText.textContent = "Kaynaklar arka planda taraniyor";
+      statusText.textContent = "Yeni veri taraniyor";
       setBusy(false, statusText.textContent);
       queueBrandRefresh(brand, brand.id, token);
+    } else {
+      statusText.textContent = "Kayitli veriler gosterildi. Yeni veri icin Simdi tara kullanin.";
+      setBusy(false, statusText.textContent);
     }
   } catch (error) {
     if (token === state.requestToken) {
@@ -665,7 +668,7 @@ async function saveActiveBrandAndRefresh() {
 
     mergeBrand(data);
     updateActiveBrandHeader(getActiveBrand());
-    await activateBrand(data.id, { refresh: true });
+    await activateBrand(data.id, { refresh: false });
   } catch (error) {
     renderWarnings([error.message]);
     statusText.textContent = "Filtre kaydedilemedi";
@@ -776,7 +779,7 @@ brandList.addEventListener("click", async (event) => {
   if (!brandId) {
     return;
   }
-  await activateBrand(brandId, { refresh: true });
+  await activateBrand(brandId, { refresh: false });
 });
 
 resultsList.addEventListener("click", async (event) => {

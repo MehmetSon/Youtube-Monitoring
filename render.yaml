@@ -37,10 +37,10 @@ services:
       - key: YOUTUBE_MAX_RESULTS
         value: "50"
       - key: YOUTUBE_MAX_PAGES
-        value: "3"
+        value: "1"
       - key: YOUTUBE_FETCH_COMMENTS
-        value: "true"
+        value: "false"
       - key: YOUTUBE_COMMENT_THREADS_PER_VIDEO
-        value: "5"
+        value: "0"
       - key: YOUTUBE_API_KEY
         sync: false
