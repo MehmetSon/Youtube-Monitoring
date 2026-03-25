@@ -640,6 +640,10 @@ class YouTubeAdapter(BaseAdapter):
         try:
             payload = self._fetch_json("commentThreads", params)
         except HTTPError as exc:
+            if exc.code == 403:
+                # YouTube cok sayida videoda yorumlari API'den kapatabiliyor;
+                # bu durumda ana video sonucunu dusurmeden yorumu sessizce atliyoruz.
+                return [], []
             return [], [f"youtube: {video_id} yorumlari alinamadi ({exc.code})."]
         except URLError as exc:
             return [], [f"youtube: {video_id} yorum baglantisi hatasi ({exc.reason})."]
