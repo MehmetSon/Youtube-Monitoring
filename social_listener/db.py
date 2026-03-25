@@ -84,7 +84,7 @@ CREATE INDEX IF NOT EXISTS idx_content_published_at ON content_items(published_a
 CREATE INDEX IF NOT EXISTS idx_content_last_seen_at ON content_items(last_seen_at);
 """
 
-POSTGRES_SCHEMA = """
+POSTGRES_BOOTSTRAP_SCHEMA = """
 CREATE TABLE IF NOT EXISTS search_queries (
     id BIGSERIAL PRIMARY KEY,
     raw_query TEXT NOT NULL,
@@ -151,6 +151,12 @@ CREATE TABLE IF NOT EXISTS content_items (
     UNIQUE(platform, external_id)
 );
 
+CREATE INDEX IF NOT EXISTS idx_content_platform ON content_items(platform);
+CREATE INDEX IF NOT EXISTS idx_content_published_at ON content_items(published_at);
+CREATE INDEX IF NOT EXISTS idx_content_last_seen_at ON content_items(last_seen_at);
+"""
+
+POSTGRES_MIGRATIONS = """
 ALTER TABLE content_items ADD COLUMN IF NOT EXISTS thumbnail_url TEXT;
 ALTER TABLE content_items ADD COLUMN IF NOT EXISTS view_count INTEGER;
 ALTER TABLE content_items ADD COLUMN IF NOT EXISTS like_count INTEGER;
@@ -159,10 +165,6 @@ ALTER TABLE content_items ADD COLUMN IF NOT EXISTS comment_count INTEGER;
 ALTER TABLE content_items ADD COLUMN IF NOT EXISTS channel_subscriber_count INTEGER;
 ALTER TABLE content_items ADD COLUMN IF NOT EXISTS is_read BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE content_items ADD COLUMN IF NOT EXISTS read_at TEXT;
-
-CREATE INDEX IF NOT EXISTS idx_content_platform ON content_items(platform);
-CREATE INDEX IF NOT EXISTS idx_content_published_at ON content_items(published_at);
-CREATE INDEX IF NOT EXISTS idx_content_last_seen_at ON content_items(last_seen_at);
 """
 
 
@@ -230,6 +232,8 @@ def _create_postgres_connection(settings: Settings) -> DatabaseConnection:
         row_factory=dict_row,
         prepare_threshold=None,
     )
+    conn.execute("SET statement_timeout TO 0")
+    conn.execute("SET lock_timeout TO 0")
     return DatabaseConnection(conn, "postgres")
 
 
@@ -252,7 +256,12 @@ def close_db(_: object | None = None) -> None:
 def init_schema() -> None:
     db = get_db()
     if db.backend == "postgres":
-        db.executescript(POSTGRES_SCHEMA)
+        existing_content_items = db.execute(
+            "SELECT to_regclass('public.content_items') AS content_items"
+        ).fetchone()
+        db.executescript(POSTGRES_BOOTSTRAP_SCHEMA)
+        if existing_content_items and existing_content_items.get("content_items"):
+            db.executescript(POSTGRES_MIGRATIONS)
     else:
         db.executescript(SQLITE_SCHEMA)
         columns = {row["name"] for row in db.execute("PRAGMA table_info(content_items)").fetchall()}
