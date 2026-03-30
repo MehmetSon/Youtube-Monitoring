@@ -104,6 +104,7 @@ def create_app() -> Flask:
         payload = request.get_json(silent=True) or request.form
         name = (payload.get("name") or "").strip()
         query_text = (payload.get("query") or "").strip()
+        official_youtube_url = (payload.get("official_youtube_url") or "").strip() or None
         if not name:
             return jsonify({"error": "Marka adi zorunlu."}), 400
         if not query_text:
@@ -117,6 +118,7 @@ def create_app() -> Flask:
                 name=name,
                 query_text=query_text,
                 platforms=platform_list,
+                official_youtube_url=official_youtube_url,
                 requested_from=requested_from,
                 requested_to=requested_to,
             )
@@ -129,6 +131,7 @@ def create_app() -> Flask:
         payload = request.get_json(silent=True) or request.form
         name = (payload.get("name") or "").strip()
         query_text = (payload.get("query") or "").strip()
+        official_youtube_url = (payload.get("official_youtube_url") or "").strip() or None
         if not name:
             return jsonify({"error": "Marka adi zorunlu."}), 400
         if not query_text:
@@ -143,6 +146,7 @@ def create_app() -> Flask:
                 name=name,
                 query_text=query_text,
                 platforms=platform_list,
+                official_youtube_url=official_youtube_url,
                 requested_from=requested_from,
                 requested_to=requested_to,
             )
@@ -189,6 +193,7 @@ def create_app() -> Flask:
             platforms=platform_list,
             requested_from=requested_from,
             requested_to=requested_to,
+            brand_id=brand_id,
         )
         if brand_id is not None:
             touch_brand_profile(brand_id)

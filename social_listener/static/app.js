@@ -18,6 +18,7 @@ const resultCount = document.getElementById("result-count");
 const platformCount = document.getElementById("platform-count");
 const statusText = document.getElementById("status-text");
 const termPill = document.getElementById("term-pill");
+const officialYouTubeUrlInput = document.getElementById("official-youtube-url");
 const deleteBrandModal = document.getElementById("delete-brand-modal");
 const deleteBrandMessage = document.getElementById("delete-brand-message");
 const deleteBrandCancelButton = document.getElementById("delete-brand-cancel");
@@ -113,6 +114,7 @@ function currentFormProfile() {
   return {
     name: activeBrandName.textContent.trim(),
     query_text: document.getElementById("query").value.trim(),
+    official_youtube_url: officialYouTubeUrlInput.value.trim() || null,
     requested_from: document.getElementById("from").value || null,
     requested_to: document.getElementById("to").value || null,
     platforms: selectedPlatforms(),
@@ -122,6 +124,7 @@ function currentFormProfile() {
 function formPayloadFromProfile(profile) {
   return {
     query: profile.query_text,
+    official_youtube_url: profile.official_youtube_url,
     from: profile.requested_from,
     to: profile.requested_to,
     platforms: profile.platforms,
@@ -304,11 +307,13 @@ function updateActiveBrandHeader(brand) {
 
   activeBrandName.textContent = brand.name;
   const platformText = (brand.platforms || []).map((platform) => platformLabel(platform)).join(", ");
-  activeBrandSubtitle.textContent = `Kayitli filtre: ${brand.query_text} | Platformlar: ${platformText || "Yok"} | Son bulunan kayit: ${brand.last_result_count || 0}`;
+  const officialText = brand.official_youtube_url ? "Resmi YouTube bagli" : "Resmi YouTube yok";
+  activeBrandSubtitle.textContent = `Kayitli filtre: ${brand.query_text} | Platformlar: ${platformText || "Yok"} | ${officialText} | Son bulunan kayit: ${brand.last_result_count || 0}`;
 }
 
 function populateBrandForm(brand) {
   document.getElementById("query").value = brand?.query_text || "";
+  officialYouTubeUrlInput.value = brand?.official_youtube_url || "";
   document.getElementById("from").value = toDateTimeLocalValue(brand?.requested_from);
   document.getElementById("to").value = toDateTimeLocalValue(brand?.requested_to);
   setSelectedPlatforms(brand?.platforms || ["youtube"]);
@@ -695,6 +700,7 @@ async function saveActiveBrandAndRefresh() {
       body: JSON.stringify({
         name: brand.name,
         query: profile.query_text,
+        official_youtube_url: profile.official_youtube_url,
         from: profile.requested_from,
         to: profile.requested_to,
         platforms: profile.platforms,

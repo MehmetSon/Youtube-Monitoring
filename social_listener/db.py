@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS brand_profiles (
     name TEXT NOT NULL UNIQUE,
     query_text TEXT NOT NULL,
     platforms_json TEXT NOT NULL,
+    official_youtube_url TEXT,
     requested_from TEXT,
     requested_to TEXT,
     last_result_count INTEGER NOT NULL DEFAULT 0,
@@ -114,6 +115,7 @@ CREATE TABLE IF NOT EXISTS brand_profiles (
     name TEXT NOT NULL UNIQUE,
     query_text TEXT NOT NULL,
     platforms_json TEXT NOT NULL,
+    official_youtube_url TEXT,
     requested_from TEXT,
     requested_to TEXT,
     last_result_count INTEGER NOT NULL DEFAULT 0,
@@ -157,6 +159,7 @@ CREATE INDEX IF NOT EXISTS idx_content_last_seen_at ON content_items(last_seen_a
 """
 
 POSTGRES_MIGRATIONS = """
+ALTER TABLE brand_profiles ADD COLUMN IF NOT EXISTS official_youtube_url TEXT;
 ALTER TABLE content_items ADD COLUMN IF NOT EXISTS thumbnail_url TEXT;
 ALTER TABLE content_items ADD COLUMN IF NOT EXISTS view_count INTEGER;
 ALTER TABLE content_items ADD COLUMN IF NOT EXISTS like_count INTEGER;
@@ -265,6 +268,9 @@ def init_schema() -> None:
     else:
         db.executescript(SQLITE_SCHEMA)
         columns = {row["name"] for row in db.execute("PRAGMA table_info(content_items)").fetchall()}
+        brand_columns = {row["name"] for row in db.execute("PRAGMA table_info(brand_profiles)").fetchall()}
+        if "official_youtube_url" not in brand_columns:
+            db.execute("ALTER TABLE brand_profiles ADD COLUMN official_youtube_url TEXT")
         if "thumbnail_url" not in columns:
             db.execute("ALTER TABLE content_items ADD COLUMN thumbnail_url TEXT")
         if "view_count" not in columns:

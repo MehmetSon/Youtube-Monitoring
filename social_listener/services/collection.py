@@ -37,9 +37,11 @@ class CollectionService:
         platforms: list[str] | None = None,
         requested_from: str | None = None,
         requested_to: str | None = None,
+        brand_id: int | None = None,
     ) -> dict[str, object]:
         target_platforms = platforms or available_platforms()
         terms = parse_query_terms(raw_query)
+        brand_profile = repository.get_brand_profile(brand_id) if brand_id is not None else None
 
         repository.log_query(raw_query, terms, target_platforms, requested_from, requested_to)
         run_id = repository.start_collection_run(raw_query, target_platforms, requested_from, requested_to)
@@ -55,7 +57,12 @@ class CollectionService:
                 continue
 
             try:
-                result = adapter.collect(terms, requested_from, requested_to)
+                result = adapter.collect(
+                    terms,
+                    requested_from,
+                    requested_to,
+                    brand_profile=brand_profile,
+                )
             except Exception as exc:  # pragma: no cover - runtime safety
                 result = type(
                     "Result",

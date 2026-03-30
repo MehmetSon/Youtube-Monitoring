@@ -176,6 +176,14 @@ textarea {
   font-size: 0.94rem;
 }
 
+.field-hint {
+  display: block;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
 .sidebar-create-button,
 .primary,
 .secondary,

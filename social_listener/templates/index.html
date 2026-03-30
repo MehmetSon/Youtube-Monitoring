@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Signal Desk</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='20260330c') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='20260330d') }}">
   </head>
   <body>
     <div class="workspace-ribbon">
@@ -84,6 +84,17 @@
               <textarea id="query" name="query" rows="3" placeholder="ornek: carrefoursa, karfur, carrefur"></textarea>
             </label>
 
+            <label class="field">
+              <span>Markanin resmi YouTube hesabi</span>
+              <input
+                id="official-youtube-url"
+                name="official_youtube_url"
+                type="url"
+                placeholder="https://www.youtube.com/@marka"
+              >
+              <small class="field-hint">Buraya sadece tek bir resmi YouTube kanal linki girin.</small>
+            </label>
+
             <div class="field-grid">
               <label class="field">
                 <span>Baslangic</span>
@@ -152,6 +163,6 @@
       </div>
     </div>
 
-    <script src="{{ url_for('static', filename='app.js', v='20260330c') }}" defer></script>
+    <script src="{{ url_for('static', filename='app.js', v='20260330d') }}" defer></script>
   </body>
 </html>

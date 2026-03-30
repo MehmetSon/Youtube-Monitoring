@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
 from langdetect import DetectorFactory, LangDetectException, detect
@@ -334,6 +334,8 @@ class BaseAdapter:
         terms: list[str],
         requested_from: str | None,
         requested_to: str | None,
+        *,
+        brand_profile: dict[str, object] | None = None,
     ) -> AdapterResult:
         raise NotImplementedError
 
@@ -349,6 +351,8 @@ class DemoAdapter(BaseAdapter):
         terms: list[str],
         requested_from: str | None,
         requested_to: str | None,
+        *,
+        brand_profile: dict[str, object] | None = None,
     ) -> AdapterResult:
         now = utcnow()
         term_text = ", ".join(terms) if terms else "brand monitor"
@@ -450,6 +454,150 @@ class YouTubeAdapter(BaseAdapter):
                     matched.append(channel)
                     seen_channel_ids.add(channel.channel_id)
         return matched
+
+    def _resolve_owned_channel_from_url(
+        self,
+        *,
+        brand_profile: dict[str, object] | None,
+        terms: list[str],
+    ) -> tuple[OwnedYouTubeChannel | None, list[str]]:
+        if not brand_profile:
+            return None, []
+
+        raw_url = str(brand_profile.get("official_youtube_url") or "").strip()
+        if not raw_url:
+            return None, []
+
+        brand_name = normalize_text(str(brand_profile.get("name") or ""))
+        aliases = [normalize_text(term) for term in terms if normalize_text(term)]
+        if brand_name and brand_name not in aliases:
+            aliases.append(brand_name)
+
+        channel_id: str | None = None
+        channel_title = ""
+        warnings: list[str] = []
+
+        parsed = urlparse(raw_url if "://" in raw_url else f"https://{raw_url}")
+        host = parsed.netloc.lower()
+        path = parsed.path.strip("/")
+
+        def fetch_channel_by_id(value: str) -> tuple[str | None, str | None]:
+            payload = self._fetch_json(
+                "channels",
+                {
+                    "part": "id,snippet",
+                    "id": value,
+                },
+            )
+            items = payload.get("items", [])
+            if not items:
+                return None, None
+            item = items[0]
+            return str(item.get("id") or ""), str((item.get("snippet") or {}).get("title") or "")
+
+        def fetch_channel_by_handle(value: str) -> tuple[str | None, str | None]:
+            payload = self._fetch_json(
+                "channels",
+                {
+                    "part": "id,snippet",
+                    "forHandle": value.lstrip("@"),
+                },
+            )
+            items = payload.get("items", [])
+            if not items:
+                return None, None
+            item = items[0]
+            return str(item.get("id") or ""), str((item.get("snippet") or {}).get("title") or "")
+
+        def fetch_channel_by_username(value: str) -> tuple[str | None, str | None]:
+            payload = self._fetch_json(
+                "channels",
+                {
+                    "part": "id,snippet",
+                    "forUsername": value,
+                },
+            )
+            items = payload.get("items", [])
+            if not items:
+                return None, None
+            item = items[0]
+            return str(item.get("id") or ""), str((item.get("snippet") or {}).get("title") or "")
+
+        def fetch_channel_by_search(value: str) -> tuple[str | None, str | None]:
+            payload = self._fetch_json(
+                "search",
+                {
+                    "part": "snippet",
+                    "type": "channel",
+                    "q": value,
+                    "maxResults": "1",
+                },
+            )
+            items = payload.get("items", [])
+            if not items:
+                return None, None
+            item = items[0]
+            item_id = item.get("id") or {}
+            return str(item_id.get("channelId") or ""), str((item.get("snippet") or {}).get("title") or "")
+
+        try:
+            if re.fullmatch(r"UC[a-zA-Z0-9_-]{20,}", raw_url):
+                channel_id, channel_title = fetch_channel_by_id(raw_url)
+            elif raw_url.startswith("@"):
+                channel_id, channel_title = fetch_channel_by_handle(raw_url)
+            elif "youtube.com" in host or "youtu.be" in host or raw_url.startswith("www.youtube.com"):
+                parts = [part for part in path.split("/") if part]
+                if parts and parts[0].startswith("@"):
+                    channel_id, channel_title = fetch_channel_by_handle(parts[0])
+                elif len(parts) >= 2 and parts[0] == "channel":
+                    channel_id, channel_title = fetch_channel_by_id(parts[1])
+                elif len(parts) >= 2 and parts[0] == "user":
+                    channel_id, channel_title = fetch_channel_by_username(parts[1])
+                elif len(parts) >= 2 and parts[0] == "c":
+                    channel_id, channel_title = fetch_channel_by_search(parts[1])
+                elif parts:
+                    channel_id, channel_title = fetch_channel_by_search(parts[-1])
+            else:
+                channel_id, channel_title = fetch_channel_by_search(raw_url)
+        except HTTPError as exc:
+            warnings.append(f"youtube resmi kanal: link cozumlenemedi ({exc.code}).")
+            return None, warnings
+        except URLError as exc:
+            warnings.append(f"youtube resmi kanal: baglanti hatasi ({exc.reason}).")
+            return None, warnings
+        except RuntimeError as exc:
+            warnings.append(f"youtube resmi kanal: {exc}")
+            return None, warnings
+
+        if not channel_id:
+            warnings.append("youtube resmi kanal: verilen linkten kanal bulunamadi.")
+            return None, warnings
+
+        return (
+            OwnedYouTubeChannel(
+                brand=brand_name or normalize_text(channel_title),
+                aliases=tuple(aliases or [normalize_text(channel_title)]),
+                channel_id=channel_id,
+                title=channel_title,
+            ),
+            warnings,
+        )
+
+    def _collect_owned_channel_targets(
+        self,
+        *,
+        terms: list[str],
+        brand_profile: dict[str, object] | None,
+    ) -> tuple[list[OwnedYouTubeChannel], list[str]]:
+        matched = self._matched_owned_channels(terms)
+        dynamic_channel, warnings = self._resolve_owned_channel_from_url(
+            brand_profile=brand_profile,
+            terms=terms,
+        )
+        seen_channel_ids = {channel.channel_id for channel in matched}
+        if dynamic_channel and dynamic_channel.channel_id not in seen_channel_ids:
+            matched.append(dynamic_channel)
+        return matched, warnings
 
     def _fetch_json(self, endpoint: str, params: dict[str, str]) -> dict[str, object]:
         if not self.api_key:
@@ -796,13 +944,16 @@ class YouTubeAdapter(BaseAdapter):
         requested_to: str | None,
         seen_at: str,
         existing_video_ids: set[str],
+        brand_profile: dict[str, object] | None = None,
     ) -> tuple[list[dict[str, object]], list[str]]:
-        matched_channels = self._matched_owned_channels(terms)
+        matched_channels, warnings = self._collect_owned_channel_targets(
+            terms=terms,
+            brand_profile=brand_profile,
+        )
         if not matched_channels:
-            return [], []
+            return [], warnings
 
         items: list[dict[str, object]] = []
-        warnings: list[str] = []
         for owned_channel in matched_channels:
             try:
                 channel_payload = self._fetch_json(
@@ -886,6 +1037,8 @@ class YouTubeAdapter(BaseAdapter):
         terms: list[str],
         requested_from: str | None,
         requested_to: str | None,
+        *,
+        brand_profile: dict[str, object] | None = None,
     ) -> AdapterResult:
         if not self.api_key:
             return AdapterResult(
@@ -957,6 +1110,7 @@ class YouTubeAdapter(BaseAdapter):
             requested_to=requested_to,
             seen_at=seen_at,
             existing_video_ids=seen_video_ids,
+            brand_profile=brand_profile,
         )
         video_items.extend(owned_items)
         warnings.extend(owned_warnings)
@@ -999,6 +1153,8 @@ class StubPlatformAdapter(BaseAdapter):
         terms: list[str],
         requested_from: str | None,
         requested_to: str | None,
+        *,
+        brand_profile: dict[str, object] | None = None,
     ) -> AdapterResult:
         return AdapterResult(
             items=[],

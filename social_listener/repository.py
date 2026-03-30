@@ -36,6 +36,7 @@ DEFAULT_BRAND_PROFILES = [
         "name": "CarrefourSA",
         "query_text": "carrefoursa, karfur, carrefur",
         "platforms": ["youtube"],
+        "official_youtube_url": "https://www.youtube.com/channel/UCGsFWBIV1mQBmOl919Q606w",
         "requested_from": None,
         "requested_to": None,
     },
@@ -43,6 +44,7 @@ DEFAULT_BRAND_PROFILES = [
         "name": "Trendyol",
         "query_text": "trendyol",
         "platforms": ["youtube"],
+        "official_youtube_url": "https://www.youtube.com/channel/UCWUkAPLGDjfsH-_LCEOGOEQ",
         "requested_from": None,
         "requested_to": None,
     },
@@ -109,18 +111,25 @@ def ensure_default_brand_profiles() -> None:
                 name,
                 query_text,
                 platforms_json,
+                official_youtube_url,
                 requested_from,
                 requested_to,
                 created_at,
                 updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(name) DO NOTHING
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(name) DO UPDATE SET
+                official_youtube_url = CASE
+                    WHEN brand_profiles.official_youtube_url IS NULL OR brand_profiles.official_youtube_url = ''
+                    THEN excluded.official_youtube_url
+                    ELSE brand_profiles.official_youtube_url
+                END
             """,
             (
                 brand["name"],
                 brand["query_text"],
                 json.dumps(_normalize_platforms(brand["platforms"])),
+                brand.get("official_youtube_url"),
                 brand.get("requested_from"),
                 brand.get("requested_to"),
                 now,
@@ -139,6 +148,7 @@ def list_brand_profiles() -> list[dict[str, object]]:
             name,
             query_text,
             platforms_json,
+            official_youtube_url,
             requested_from,
             requested_to,
             last_result_count,
@@ -161,6 +171,7 @@ def get_brand_profile(brand_id: int) -> dict[str, object] | None:
             name,
             query_text,
             platforms_json,
+            official_youtube_url,
             requested_from,
             requested_to,
             last_result_count,
@@ -180,6 +191,7 @@ def create_brand_profile(
     name: str,
     query_text: str,
     platforms: Iterable[str] | None,
+    official_youtube_url: str | None,
     requested_from: str | None,
     requested_to: str | None,
 ) -> dict[str, object]:
@@ -191,17 +203,19 @@ def create_brand_profile(
             name,
             query_text,
             platforms_json,
+            official_youtube_url,
             requested_from,
             requested_to,
             created_at,
             updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             name.strip(),
             query_text.strip(),
             json.dumps(_normalize_platforms(platforms)),
+            (official_youtube_url or "").strip() or None,
             requested_from,
             requested_to,
             now,
@@ -218,6 +232,7 @@ def update_brand_profile(
     name: str,
     query_text: str,
     platforms: Iterable[str] | None,
+    official_youtube_url: str | None,
     requested_from: str | None,
     requested_to: str | None,
 ) -> dict[str, object] | None:
@@ -229,6 +244,7 @@ def update_brand_profile(
             name = ?,
             query_text = ?,
             platforms_json = ?,
+            official_youtube_url = ?,
             requested_from = ?,
             requested_to = ?,
             updated_at = ?
@@ -238,6 +254,7 @@ def update_brand_profile(
             name.strip(),
             query_text.strip(),
             json.dumps(_normalize_platforms(platforms)),
+            (official_youtube_url or "").strip() or None,
             requested_from,
             requested_to,
             utcnow_iso(),
