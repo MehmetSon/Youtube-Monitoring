@@ -61,6 +61,7 @@ class Settings:
     database_url: str | None
     database_backend: str
     owned_youtube_channels_path: Path
+    app_timezone: str
     secret_key: str
     enable_demo_data: bool
     target_language: str
@@ -88,6 +89,7 @@ def load_settings() -> Settings:
         database_url=database_url,
         database_backend=database_backend,
         owned_youtube_channels_path=owned_youtube_channels_path,
+        app_timezone=os.getenv("APP_TIMEZONE", "Europe/Istanbul").strip() or "Europe/Istanbul",
         secret_key=os.getenv("APP_SECRET_KEY", "dev-secret-key"),
         enable_demo_data=_env_bool("APP_ENABLE_DEMO_DATA", True),
         target_language=os.getenv("APP_TARGET_LANGUAGE", "tr").strip() or "tr",

@@ -4,6 +4,7 @@ import logging
 from threading import Lock
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from flask import Flask, jsonify, render_template, request
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -22,7 +23,7 @@ from .repository import (
 from .services import CollectionService
 
 
-def _normalize_datetime(raw_value: str | None) -> str | None:
+def _normalize_datetime(raw_value: str | None, timezone_name: str) -> str | None:
     if not raw_value:
         return None
 
@@ -36,8 +37,11 @@ def _normalize_datetime(raw_value: str | None) -> str | None:
         return value
 
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.replace(microsecond=0).isoformat()
+        try:
+            parsed = parsed.replace(tzinfo=ZoneInfo(timezone_name))
+        except ZoneInfoNotFoundError:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).replace(microsecond=0).isoformat()
 
 
 def _coerce_platform_list(raw_value: object, *, fallback: list[str] | None = None) -> list[str]:
@@ -111,8 +115,8 @@ def create_app() -> Flask:
             return jsonify({"error": "Filtre sorgusu zorunlu."}), 400
 
         platform_list = _coerce_platform_list(payload.get("platforms"), fallback=["youtube"])
-        requested_from = _normalize_datetime(payload.get("from"))
-        requested_to = _normalize_datetime(payload.get("to"))
+        requested_from = _normalize_datetime(payload.get("from"), settings.app_timezone)
+        requested_to = _normalize_datetime(payload.get("to"), settings.app_timezone)
         try:
             brand = create_brand_profile(
                 name=name,
@@ -138,8 +142,8 @@ def create_app() -> Flask:
             return jsonify({"error": "Filtre sorgusu zorunlu."}), 400
 
         platform_list = _coerce_platform_list(payload.get("platforms"), fallback=["youtube"])
-        requested_from = _normalize_datetime(payload.get("from"))
-        requested_to = _normalize_datetime(payload.get("to"))
+        requested_from = _normalize_datetime(payload.get("from"), settings.app_timezone)
+        requested_to = _normalize_datetime(payload.get("to"), settings.app_timezone)
         try:
             brand = update_brand_profile(
                 brand_id=brand_id,
@@ -182,8 +186,8 @@ def create_app() -> Flask:
         else:
             platform_list = request.args.getlist("platform")
 
-        requested_from = _normalize_datetime(payload.get("from"))
-        requested_to = _normalize_datetime(payload.get("to"))
+        requested_from = _normalize_datetime(payload.get("from"), settings.app_timezone)
+        requested_to = _normalize_datetime(payload.get("to"), settings.app_timezone)
         raw_brand_id = payload.get("brand_id")
         brand_id = int(raw_brand_id) if str(raw_brand_id).strip().isdigit() else None
 
@@ -206,8 +210,8 @@ def create_app() -> Flask:
             return jsonify({"error": "query parametresi zorunlu."}), 400
 
         platform_list = request.args.getlist("platform")
-        requested_from = _normalize_datetime(request.args.get("from"))
-        requested_to = _normalize_datetime(request.args.get("to"))
+        requested_from = _normalize_datetime(request.args.get("from"), settings.app_timezone)
+        requested_to = _normalize_datetime(request.args.get("to"), settings.app_timezone)
         raw_brand_id = request.args.get("brand_id")
         brand_id = int(raw_brand_id) if raw_brand_id and raw_brand_id.isdigit() else None
 
