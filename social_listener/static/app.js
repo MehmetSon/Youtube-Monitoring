@@ -18,10 +18,15 @@ const resultCount = document.getElementById("result-count");
 const platformCount = document.getElementById("platform-count");
 const statusText = document.getElementById("status-text");
 const termPill = document.getElementById("term-pill");
+const deleteBrandModal = document.getElementById("delete-brand-modal");
+const deleteBrandMessage = document.getElementById("delete-brand-message");
+const deleteBrandCancelButton = document.getElementById("delete-brand-cancel");
+const deleteBrandConfirmButton = document.getElementById("delete-brand-confirm");
 
 const state = {
   brands: [],
   activeBrandId: null,
+  pendingDeleteBrandId: null,
   requestToken: 0,
 };
 
@@ -40,6 +45,10 @@ function sortBrands(items) {
 
 function getActiveBrand() {
   return state.brands.find((brand) => brand.id === state.activeBrandId) || null;
+}
+
+function getBrandById(brandId) {
+  return state.brands.find((brand) => brand.id === brandId) || null;
 }
 
 function setBrandWorkspaceEnabled(isEnabled) {
@@ -282,6 +291,10 @@ function mergeBrand(updatedBrand) {
   );
 }
 
+function removeBrand(brandId) {
+  state.brands = state.brands.filter((brand) => brand.id !== brandId);
+}
+
 function updateActiveBrandHeader(brand) {
   if (!brand) {
     activeBrandName.textContent = "Uygulamaya hos geldiniz";
@@ -330,17 +343,43 @@ function renderBrandList() {
 
   brandList.innerHTML = filteredBrands
     .map((brand) => `
-      <button
-        type="button"
-        class="brand-row ${brand.id === state.activeBrandId ? "brand-row-active" : ""}"
-        data-brand-id="${brand.id}"
-      >
-        <span class="brand-row-title">${escapeHtml(brand.name)}</span>
-        <span class="brand-row-query">${escapeHtml(clipText(brand.query_text, 54))}</span>
-        <span class="brand-row-count">${escapeHtml(String(brand.last_result_count || 0))}</span>
-      </button>
+      <article class="brand-card ${brand.id === state.activeBrandId ? "brand-card-active" : ""}">
+        <button
+          type="button"
+          class="brand-row ${brand.id === state.activeBrandId ? "brand-row-active" : ""}"
+          data-brand-id="${brand.id}"
+        >
+          <span class="brand-row-title">${escapeHtml(brand.name)}</span>
+          <span class="brand-row-query">${escapeHtml(clipText(brand.query_text, 54))}</span>
+          <span class="brand-row-count">${escapeHtml(String(brand.last_result_count || 0))}</span>
+        </button>
+        <button
+          type="button"
+          class="brand-delete-button"
+          data-brand-delete-id="${brand.id}"
+          aria-label="${escapeHtml(`${brand.name} markasini sil`)}"
+          title="Markayi sil"
+        >
+          &minus;
+        </button>
+      </article>
     `)
     .join("");
+}
+
+function closeDeleteBrandModal() {
+  state.pendingDeleteBrandId = null;
+  deleteBrandModal.classList.add("modal-hidden");
+}
+
+function openDeleteBrandModal(brandId) {
+  const brand = getBrandById(brandId);
+  if (!brand) {
+    return;
+  }
+  state.pendingDeleteBrandId = brandId;
+  deleteBrandMessage.textContent = `"${brand.name}" markasini silmek istediginize emin misiniz?`;
+  deleteBrandModal.classList.remove("modal-hidden");
 }
 
 function renderResults(data) {
@@ -726,6 +765,46 @@ async function createBrand() {
   }
 }
 
+async function deleteBrand() {
+  const brandId = state.pendingDeleteBrandId;
+  const brand = getBrandById(brandId);
+  if (!brandId || !brand) {
+    closeDeleteBrandModal();
+    return;
+  }
+
+  setBusy(true, "Marka siliniyor");
+  try {
+    const response = await fetch(`/api/brands/${brandId}`, {
+      method: "DELETE",
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || "Marka silinemedi");
+    }
+
+    closeDeleteBrandModal();
+    removeBrand(brandId);
+    renderBrandList();
+
+    if (state.activeBrandId === brandId) {
+      state.activeBrandId = null;
+      populateBrandForm(null);
+      updateActiveBrandHeader(null);
+      setBrandWorkspaceEnabled(false);
+      renderWelcomeState();
+    }
+
+    renderWarnings([]);
+    statusText.textContent = `${brand.name} silindi`;
+    setBusy(false, statusText.textContent);
+  } catch (error) {
+    renderWarnings([error.message]);
+    statusText.textContent = "Marka silinemedi";
+    setBusy(false, statusText.textContent);
+  }
+}
+
 async function bootstrap() {
   try {
     await fetchBrands();
@@ -771,6 +850,15 @@ brandCreateForm.addEventListener("submit", async (event) => {
 brandFilterInput.addEventListener("input", renderBrandList);
 
 brandList.addEventListener("click", async (event) => {
+  const deleteButton = event.target.closest("[data-brand-delete-id]");
+  if (deleteButton) {
+    const brandId = Number(deleteButton.dataset.brandDeleteId);
+    if (brandId) {
+      openDeleteBrandModal(brandId);
+    }
+    return;
+  }
+
   const button = event.target.closest("[data-brand-id]");
   if (!button) {
     return;
@@ -812,6 +900,26 @@ resultsList.addEventListener("click", async (event) => {
   } catch (error) {
     renderWarnings([error.message]);
     statusText.textContent = "Okundu durumu kaydedilemedi";
+  }
+});
+
+deleteBrandCancelButton.addEventListener("click", () => {
+  closeDeleteBrandModal();
+});
+
+deleteBrandConfirmButton.addEventListener("click", async () => {
+  await deleteBrand();
+});
+
+deleteBrandModal.addEventListener("click", (event) => {
+  if (event.target === deleteBrandModal) {
+    closeDeleteBrandModal();
+  }
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !deleteBrandModal.classList.contains("modal-hidden")) {
+    closeDeleteBrandModal();
   }
 });
 

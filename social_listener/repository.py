@@ -248,6 +248,19 @@ def update_brand_profile(
     return get_brand_profile(brand_id)
 
 
+def delete_brand_profile(brand_id: int) -> bool:
+    db = get_db()
+    cursor = db.execute(
+        """
+        DELETE FROM brand_profiles
+        WHERE id = ?
+        """,
+        (brand_id,),
+    )
+    db.commit()
+    return bool(getattr(cursor, "rowcount", 0))
+
+
 def touch_brand_profile(brand_id: int, result_count: int | None = None) -> dict[str, object] | None:
     db = get_db()
     if result_count is None:

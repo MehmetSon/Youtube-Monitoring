@@ -4,9 +4,15 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Signal Desk</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='20260325b') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='20260330c') }}">
   </head>
   <body>
+    <div class="workspace-ribbon">
+      <span class="workspace-ribbon-name">Mehmet Kabak</span>
+      <span class="workspace-ribbon-separator">|</span>
+      <span class="workspace-ribbon-badge">Beta surum</span>
+    </div>
+
     <main class="workspace-shell">
       <aside class="sidebar">
         <div class="sidebar-top">
@@ -134,6 +140,18 @@
       </section>
     </main>
 
-    <script src="{{ url_for('static', filename='app.js', v='20260325b') }}" defer></script>
+    <div id="delete-brand-modal" class="modal-backdrop modal-hidden" role="dialog" aria-modal="true" aria-labelledby="delete-brand-title">
+      <div class="modal-card">
+        <p class="panel-kicker">Silme Onayi</p>
+        <h2 id="delete-brand-title">Markayi sil</h2>
+        <p id="delete-brand-message" class="modal-copy">Bu markayi silmek istediginize emin misiniz?</p>
+        <div class="modal-actions">
+          <button id="delete-brand-cancel" type="button" class="secondary">Vazgec</button>
+          <button id="delete-brand-confirm" type="button" class="danger">Evet, sil</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='app.js', v='20260330c') }}" defer></script>
   </body>
 </html>

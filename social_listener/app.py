@@ -12,6 +12,7 @@ from .config import load_settings
 from .db import INTEGRITY_ERRORS, close_db, init_schema
 from .repository import (
     create_brand_profile,
+    delete_brand_profile,
     ensure_default_brand_profiles,
     list_brand_profiles,
     set_item_read_state,
@@ -150,6 +151,13 @@ def create_app() -> Flask:
         if brand is None:
             return jsonify({"error": "Marka bulunamadi."}), 404
         return jsonify(brand), 200
+
+    @app.delete("/api/brands/<int:brand_id>")
+    def delete_brand(brand_id: int) -> tuple[object, int]:
+        deleted = delete_brand_profile(brand_id)
+        if not deleted:
+            return jsonify({"error": "Marka bulunamadi."}), 404
+        return jsonify({"ok": True, "id": brand_id}), 200
 
     @app.get("/health")
     def health() -> tuple[dict[str, object], int]:

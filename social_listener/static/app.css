@@ -28,6 +28,46 @@ body {
   font-family: "Avenir Next", "Segoe UI", sans-serif;
 }
 
+.workspace-ribbon {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 40;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(88, 118, 216, 0.14);
+  box-shadow: 0 18px 36px rgba(56, 74, 128, 0.14);
+  backdrop-filter: blur(12px);
+}
+
+.workspace-ribbon-name {
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.workspace-ribbon-separator {
+  color: rgba(35, 50, 69, 0.34);
+}
+
+.workspace-ribbon-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(88, 118, 216, 0.12);
+  color: var(--accent-strong);
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 button,
 input,
 textarea {
@@ -187,9 +227,13 @@ textarea {
   padding-right: 4px;
 }
 
+.brand-card {
+  position: relative;
+}
+
 .brand-row {
   width: 100%;
-  padding: 11px 14px;
+  padding: 11px 54px 11px 14px;
   border: 1px solid var(--line);
   background: #fff;
   display: grid;
@@ -198,6 +242,30 @@ textarea {
   text-align: left;
   box-shadow: 0 10px 24px rgba(56, 74, 128, 0.05);
   border-radius: 18px;
+}
+
+.brand-delete-button {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  transform: translateY(-50%);
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(226, 74, 74, 0.14);
+  color: #c63c3c;
+  border: 1px solid rgba(198, 60, 60, 0.22);
+  font-size: 1.1rem;
+  font-weight: 700;
+  line-height: 1;
+  box-shadow: 0 10px 20px rgba(198, 60, 60, 0.12);
+}
+
+.brand-delete-button:hover {
+  background: rgba(226, 74, 74, 0.2);
 }
 
 .brand-row-title {
@@ -226,6 +294,10 @@ textarea {
 .brand-row-active {
   background: linear-gradient(135deg, rgba(88, 118, 216, 0.16), rgba(255, 255, 255, 0.98));
   border-color: rgba(88, 118, 216, 0.36);
+}
+
+.brand-card-active .brand-delete-button {
+  border-color: rgba(88, 118, 216, 0.28);
 }
 
 .brand-empty {
@@ -679,6 +751,52 @@ h1 {
 
 .result-card-read {
   border-color: rgba(75, 184, 110, 0.32);
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(20, 31, 48, 0.38);
+  backdrop-filter: blur(8px);
+}
+
+.modal-hidden {
+  display: none;
+}
+
+.modal-card {
+  width: min(100%, 420px);
+  border-radius: 24px;
+  padding: 22px;
+  background: rgba(255, 255, 255, 0.97);
+  border: 1px solid var(--line);
+  box-shadow: 0 26px 60px rgba(28, 42, 72, 0.22);
+}
+
+.modal-copy {
+  margin: 12px 0 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 22px;
+  flex-wrap: wrap;
+}
+
+.danger {
+  background: #d95050;
+  color: #fff;
+  padding: 12px 18px;
+  font-weight: 700;
+  border-radius: 999px;
 }
 
 @media (max-width: 1180px) {
