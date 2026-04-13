@@ -772,14 +772,14 @@ def search_content(
         column if column in available_columns else _literal_alias(column)
         for column in select_columns
     )
-    order_candidates = [column_name for column_name in ("published_at", "last_seen_at", "id") if column_name in available_columns]
-    if order_candidates:
-        if len(order_candidates) == 1:
-            order_sql = f"{order_candidates[0]} DESC"
-        else:
-            order_sql = "COALESCE(" + ", ".join(order_candidates) + ") DESC"
-    else:
-        order_sql = "id DESC"
+    order_parts = []
+    if "published_at" in available_columns:
+        order_parts.append("published_at DESC NULLS LAST")
+    if "last_seen_at" in available_columns:
+        order_parts.append("last_seen_at DESC NULLS LAST")
+    if "id" in available_columns:
+        order_parts.append("id DESC")
+    order_sql = ", ".join(order_parts) if order_parts else "id DESC"
 
     rows = db.execute(
         f"""
