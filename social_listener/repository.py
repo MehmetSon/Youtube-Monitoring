@@ -95,6 +95,30 @@ def _normalize_platforms(platforms: Iterable[str] | None) -> list[str]:
     return normalized or ["youtube"]
 
 
+def _list_table_columns(table_name: str) -> set[str]:
+    db = get_db()
+    if db.backend == "postgres":
+        rows = db.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = ?
+            """,
+            (table_name,),
+        ).fetchall()
+        return {str(row["column_name"]) for row in rows}
+
+    rows = db.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return {str(row["name"]) for row in rows}
+
+
+def _literal_alias(column_name: str) -> str:
+    db = get_db()
+    if column_name == "is_read":
+        return "FALSE AS is_read" if db.backend == "postgres" else "0 AS is_read"
+    return f"NULL AS {column_name}"
+
+
 def _brand_row_to_dict(row: object | None) -> dict[str, object] | None:
     if row is None:
         return None
@@ -668,6 +692,7 @@ def search_content(
     limit: int = 100,
 ) -> list[dict[str, object]]:
     db = get_db()
+    available_columns = _list_table_columns("content_items")
     where_parts = []
     params: list[object] = []
 
@@ -703,32 +728,40 @@ def search_content(
     where_sql = " WHERE " + " AND ".join(where_parts) if where_parts else ""
     params.append(limit)
 
+    select_columns = [
+        "id",
+        "platform",
+        "source_kind",
+        "content_type",
+        "external_id",
+        "source_name",
+        "author_name",
+        "title",
+        "body_text",
+        "thumbnail_url",
+        "view_count",
+        "like_count",
+        "dislike_count",
+        "comment_count",
+        "channel_subscriber_count",
+        "content_url",
+        "permalink",
+        "language",
+        "published_at",
+        "is_read",
+        "read_at",
+        "first_seen_at",
+        "last_seen_at",
+    ]
+    select_sql = ",\n            ".join(
+        column if column in available_columns else _literal_alias(column)
+        for column in select_columns
+    )
+
     rows = db.execute(
         f"""
         SELECT
-            id,
-            platform,
-            source_kind,
-            content_type,
-            external_id,
-            source_name,
-            author_name,
-            title,
-            body_text,
-            thumbnail_url,
-            view_count,
-            like_count,
-            dislike_count,
-            comment_count,
-            channel_subscriber_count,
-            content_url,
-            permalink,
-            language,
-            published_at,
-            is_read,
-            read_at,
-            first_seen_at,
-            last_seen_at
+            {select_sql}
         FROM content_items
         {where_sql}
         ORDER BY COALESCE(published_at, last_seen_at) DESC
