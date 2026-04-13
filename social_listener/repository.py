@@ -697,31 +697,42 @@ def search_content(
     params: list[object] = []
 
     if terms:
+        searchable_columns: list[str] = []
+        if "normalized_text" in available_columns:
+            searchable_columns.append("normalized_text")
+        else:
+            for column_name in ("title", "body_text", "source_name", "author_name", "content_url", "external_id"):
+                if column_name in available_columns and column_name not in searchable_columns:
+                    searchable_columns.append(column_name)
+
         term_clauses = []
         for term in terms:
             variant_clauses = []
             for pattern in _term_like_patterns(term):
-                variant_clauses.append("normalized_text LIKE ?")
-                params.append(pattern)
+                if searchable_columns:
+                    for column_name in searchable_columns:
+                        variant_clauses.append(f"{column_name} LIKE ?")
+                        params.append(pattern)
             if variant_clauses:
                 term_clauses.append("(" + " OR ".join(variant_clauses) + ")")
         if term_clauses:
-            where_parts.append("((source_kind LIKE 'owned-%') OR (" + " OR ".join(term_clauses) + "))")
+            owned_clause = "(source_kind LIKE 'owned-%')" if "source_kind" in available_columns else "0 = 1"
+            where_parts.append("(" + owned_clause + " OR (" + " OR ".join(term_clauses) + "))")
 
-    if platforms:
+    if platforms and "platform" in available_columns:
         placeholders = ", ".join(["?"] * len(platforms))
         where_parts.append(f"platform IN ({placeholders})")
         params.extend(platforms)
 
-    if requested_from:
+    if requested_from and "published_at" in available_columns:
         where_parts.append("published_at >= ?")
         params.append(requested_from)
 
-    if requested_to:
+    if requested_to and "published_at" in available_columns:
         where_parts.append("published_at <= ?")
         params.append(requested_to)
 
-    if not include_demo:
+    if not include_demo and "source_kind" in available_columns:
         where_parts.append("source_kind != ?")
         params.append("demo")
 
@@ -757,6 +768,14 @@ def search_content(
         column if column in available_columns else _literal_alias(column)
         for column in select_columns
     )
+    order_candidates = [column_name for column_name in ("published_at", "last_seen_at", "id") if column_name in available_columns]
+    if order_candidates:
+        if len(order_candidates) == 1:
+            order_sql = f"{order_candidates[0]} DESC"
+        else:
+            order_sql = "COALESCE(" + ", ".join(order_candidates) + ") DESC"
+    else:
+        order_sql = "id DESC"
 
     rows = db.execute(
         f"""
@@ -764,7 +783,7 @@ def search_content(
             {select_sql}
         FROM content_items
         {where_sql}
-        ORDER BY COALESCE(published_at, last_seen_at) DESC
+        ORDER BY {order_sql}
         LIMIT ?
         """,
         params,

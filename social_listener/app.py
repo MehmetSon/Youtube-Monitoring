@@ -397,16 +397,20 @@ def create_app() -> Flask:
         raw_brand_id = request.args.get("brand_id")
         brand_id = int(raw_brand_id) if raw_brand_id and raw_brand_id.isdigit() else None
 
-        service = CollectionService(settings)
-        result = service.search(
-            raw_query=raw_query,
-            platforms=platform_list,
-            requested_from=requested_from,
-            requested_to=requested_to,
-        )
-        if brand_id is not None:
-            touch_brand_profile(brand_id, result_count=int(result.get("count", 0)))
-        return jsonify(result), 200
+        try:
+            service = CollectionService(settings)
+            result = service.search(
+                raw_query=raw_query,
+                platforms=platform_list,
+                requested_from=requested_from,
+                requested_to=requested_to,
+            )
+            if brand_id is not None:
+                touch_brand_profile(brand_id, result_count=int(result.get("count", 0)))
+            return jsonify(result), 200
+        except Exception:  # pragma: no cover - runtime safety
+            app.logger.exception("Arama basarisiz.")
+            return jsonify({"error": "Arama gecici olarak kullanilamiyor. Lutfen biraz sonra tekrar deneyin."}), 500
 
     @app.post("/api/items/<int:item_id>/read")
     def update_read_state(item_id: int) -> tuple[object, int]:
