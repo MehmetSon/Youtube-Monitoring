@@ -3,11 +3,23 @@ const searchCacheButton = document.getElementById("search-cache");
 const refreshBrandButton = document.getElementById("refresh-brand");
 const createBrandButton = document.getElementById("create-brand");
 const brandCreateForm = document.getElementById("brand-create-form");
+const apiSourceForm = document.getElementById("api-source-form");
 const brandFilterInput = document.getElementById("brand-filter-input");
 const brandList = document.getElementById("brand-list");
 const brandCount = document.getElementById("brand-count");
 const newBrandNameInput = document.getElementById("new-brand-name");
 const newBrandQueryInput = document.getElementById("new-brand-query");
+const apiSourceList = document.getElementById("api-source-list");
+const apiSourceNameInput = document.getElementById("api-source-name");
+const apiSourcePlatformInput = document.getElementById("api-source-platform");
+const apiSourceMethodInput = document.getElementById("api-source-method");
+const apiSourceUrlTemplateInput = document.getElementById("api-source-url-template");
+const apiSourceResultsPathInput = document.getElementById("api-source-results-path");
+const apiSourceEnabledInput = document.getElementById("api-source-enabled");
+const apiSourceHeadersJsonInput = document.getElementById("api-source-headers-json");
+const apiSourceBodyTemplateInput = document.getElementById("api-source-body-template");
+const apiSourceFieldMappingJsonInput = document.getElementById("api-source-field-mapping-json");
+const apiSourcePaginationJsonInput = document.getElementById("api-source-pagination-json");
 const activeBrandName = document.getElementById("active-brand-name");
 const activeBrandSubtitle = document.getElementById("active-brand-subtitle");
 const filterPanel = document.getElementById("filter-panel");
@@ -19,16 +31,21 @@ const platformCount = document.getElementById("platform-count");
 const statusText = document.getElementById("status-text");
 const termPill = document.getElementById("term-pill");
 const officialYouTubeUrlInput = document.getElementById("official-youtube-url");
+const officialFacebookUrlInput = document.getElementById("official-facebook-url");
 const deleteBrandModal = document.getElementById("delete-brand-modal");
 const deleteBrandMessage = document.getElementById("delete-brand-message");
 const deleteBrandCancelButton = document.getElementById("delete-brand-cancel");
 const deleteBrandConfirmButton = document.getElementById("delete-brand-confirm");
+const API_SOURCES_UI_ENABLED = document.body.dataset.apiSourcesUi === "true";
 
 const state = {
   brands: [],
+  apiSources: [],
   activeBrandId: null,
   pendingDeleteBrandId: null,
   requestToken: 0,
+  collectPollTimer: null,
+  activeCollectJobId: null,
 };
 
 function escapeHtml(value) {
@@ -42,6 +59,16 @@ function escapeHtml(value) {
 
 function sortBrands(items) {
   return [...items].sort((left, right) => left.name.localeCompare(right.name, "tr"));
+}
+
+function sortApiSources(items) {
+  return [...items].sort((left, right) => {
+    const platformCompare = left.platform.localeCompare(right.platform, "tr");
+    if (platformCompare !== 0) {
+      return platformCompare;
+    }
+    return left.name.localeCompare(right.name, "tr");
+  });
 }
 
 function getActiveBrand() {
@@ -115,6 +142,7 @@ function currentFormProfile() {
     name: activeBrandName.textContent.trim(),
     query_text: document.getElementById("query").value.trim(),
     official_youtube_url: officialYouTubeUrlInput.value.trim() || null,
+    official_facebook_url: officialFacebookUrlInput.value.trim() || null,
     requested_from: document.getElementById("from").value || null,
     requested_to: document.getElementById("to").value || null,
     platforms: selectedPlatforms(),
@@ -125,6 +153,7 @@ function formPayloadFromProfile(profile) {
   return {
     query: profile.query_text,
     official_youtube_url: profile.official_youtube_url,
+    official_facebook_url: profile.official_facebook_url,
     from: profile.requested_from,
     to: profile.requested_to,
     platforms: profile.platforms,
@@ -180,6 +209,30 @@ function formatRelativeTime(value) {
 
   const diffYears = Math.floor(diffMonths / 12);
   return `${diffYears} yil once`;
+}
+
+function formatFoundLabel(value) {
+  if (!value) {
+    return "yakalanma tarihi yok";
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "yakalanma tarihi yok";
+  }
+
+  const diffMs = Math.max(0, Date.now() - date.getTime());
+  const diffHours = diffMs / (1000 * 60 * 60);
+  if (diffHours < 24) {
+    return `${formatRelativeTime(value)} yakalandi`;
+  }
+
+  const formatted = new Intl.DateTimeFormat("tr-TR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(date);
+  return `${formatted}'da yakalandi`;
 }
 
 function clipText(value, limit = 280) {
@@ -271,7 +324,7 @@ function metricDisplayValue(item, field) {
 function itemTags(item) {
   const tags = ["checked"];
   tags.push(item.is_read ? "read" : "new");
-  if (item.source_kind === "owned-channel") {
+  if (String(item.source_kind || "").startsWith("owned-")) {
     tags.push("official");
   }
   return tags;
@@ -281,7 +334,12 @@ function matchSummary(item, terms) {
   if (!terms.length) {
     return "eslesme yok";
   }
-  const suffix = item.source_kind === "owned-channel" ? ", resmi kanal" : "";
+  const sourceKind = String(item.source_kind || "");
+  const suffix = sourceKind === "owned-page"
+    ? ", resmi sayfa"
+    : sourceKind === "owned-channel"
+      ? ", resmi kanal"
+      : "";
   return `${terms.join(", ")}${suffix}`;
 }
 
@@ -298,6 +356,23 @@ function removeBrand(brandId) {
   state.brands = state.brands.filter((brand) => brand.id !== brandId);
 }
 
+function mergeApiSource(updatedSource) {
+  const exists = state.apiSources.some((source) => source.id === updatedSource.id);
+  state.apiSources = sortApiSources(
+    exists
+      ? state.apiSources.map((source) => (source.id === updatedSource.id ? updatedSource : source))
+      : [...state.apiSources, updatedSource]
+  );
+}
+
+function removeApiSource(sourceId) {
+  state.apiSources = state.apiSources.filter((source) => source.id !== sourceId);
+}
+
+function prettyJson(value) {
+  return JSON.stringify(value || {}, null, 2);
+}
+
 function updateActiveBrandHeader(brand) {
   if (!brand) {
     activeBrandName.textContent = "Uygulamaya hos geldiniz";
@@ -307,13 +382,16 @@ function updateActiveBrandHeader(brand) {
 
   activeBrandName.textContent = brand.name;
   const platformText = (brand.platforms || []).map((platform) => platformLabel(platform)).join(", ");
-  const officialText = brand.official_youtube_url ? "Resmi YouTube bagli" : "Resmi YouTube yok";
-  activeBrandSubtitle.textContent = `Kayitli filtre: ${brand.query_text} | Platformlar: ${platformText || "Yok"} | ${officialText} | Son bulunan kayit: ${brand.last_result_count || 0}`;
+  const officialParts = [];
+  officialParts.push(brand.official_youtube_url ? "Resmi YouTube bagli" : "Resmi YouTube yok");
+  officialParts.push(brand.official_facebook_url ? "Resmi Facebook bagli" : "Resmi Facebook yok");
+  activeBrandSubtitle.textContent = `Kayitli filtre: ${brand.query_text} | Platformlar: ${platformText || "Yok"} | ${officialParts.join(" | ")} | Son bulunan kayit: ${brand.last_result_count || 0}`;
 }
 
 function populateBrandForm(brand) {
   document.getElementById("query").value = brand?.query_text || "";
   officialYouTubeUrlInput.value = brand?.official_youtube_url || "";
+  officialFacebookUrlInput.value = brand?.official_facebook_url || "";
   document.getElementById("from").value = toDateTimeLocalValue(brand?.requested_from);
   document.getElementById("to").value = toDateTimeLocalValue(brand?.requested_to);
   setSelectedPlatforms(brand?.platforms || ["youtube"]);
@@ -369,6 +447,56 @@ function renderBrandList() {
         </button>
       </article>
     `)
+    .join("");
+}
+
+function renderApiSourceList() {
+  if (!API_SOURCES_UI_ENABLED || !apiSourceList) {
+    return;
+  }
+  if (!state.apiSources.length) {
+    apiSourceList.innerHTML = '<article class="brand-empty">Henuz eklenmis harici API kaynagi yok.</article>';
+    return;
+  }
+
+  apiSourceList.innerHTML = state.apiSources
+    .map((source) => {
+      const statusClass = source.is_enabled ? "" : " api-source-chip-disabled";
+      const paginationMaxPages = Number(source.pagination?.max_pages || 0);
+      return `
+        <article class="api-source-item">
+          <div class="api-source-item-head">
+            <div>
+              <h3>${escapeHtml(source.name)}</h3>
+              <div class="api-source-item-meta">
+                <span class="api-source-chip">${escapeHtml(platformLabel(source.platform))}</span>
+                <span class="api-source-chip">${escapeHtml(source.method)}</span>
+                <span class="api-source-chip${statusClass}">${source.is_enabled ? "Aktif" : "Pasif"}</span>
+                ${paginationMaxPages > 1 ? `<span class="api-source-chip">Sayfa ${paginationMaxPages}</span>` : ""}
+              </div>
+            </div>
+          </div>
+          <p class="api-source-url">${escapeHtml(source.url_template)}</p>
+          <div class="api-source-actions">
+            <button
+              type="button"
+              class="small-button"
+              data-api-source-toggle-id="${source.id}"
+              data-api-source-enabled="${source.is_enabled ? "1" : "0"}"
+            >
+              ${source.is_enabled ? "Pasife al" : "Aktif et"}
+            </button>
+            <button
+              type="button"
+              class="small-button small-button-danger"
+              data-api-source-delete-id="${source.id}"
+            >
+              Sil
+            </button>
+          </div>
+        </article>
+      `;
+    })
     .join("");
 }
 
@@ -447,7 +575,7 @@ function renderResults(data) {
                 <span>yayinlandi ${escapeHtml(formatRelativeTime(item.published_at))}</span>
                 <span>${escapeHtml(source)}</span>
                 <span>${escapeHtml(platformLabel(item.platform))}</span>
-                <span>yakalandi ${escapeHtml(formatRelativeTime(item.last_seen_at))}</span>
+                <span>${escapeHtml(formatFoundLabel(item.first_seen_at || item.last_seen_at))}</span>
                 <span>ID ${escapeHtml(shortId)}</span>
               </div>
             </div>
@@ -553,6 +681,20 @@ async function fetchBrands(preferredBrandId = null) {
   renderBrandList();
 }
 
+async function fetchApiSources() {
+  if (!API_SOURCES_UI_ENABLED) {
+    state.apiSources = [];
+    return;
+  }
+  const response = await fetch("/api/api-sources");
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || "API kaynaklari yuklenemedi");
+  }
+  state.apiSources = sortApiSources(data.items || []);
+  renderApiSourceList();
+}
+
 async function searchBrandProfile(profile, options = {}) {
   const {
     brandId = null,
@@ -601,6 +743,75 @@ async function searchBrandProfile(profile, options = {}) {
   return data;
 }
 
+function clearCollectPolling() {
+  if (state.collectPollTimer) {
+    clearTimeout(state.collectPollTimer);
+    state.collectPollTimer = null;
+  }
+  state.activeCollectJobId = null;
+}
+
+async function pollCollectionJob(jobId, profile, options = {}) {
+  const {
+    brandId = null,
+    token,
+  } = options;
+
+  if (token !== state.requestToken || state.activeCollectJobId !== jobId) {
+    return;
+  }
+
+  try {
+    const response = await fetch(`/api/collect/${jobId}`);
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || "Toplama durumu alinamadi");
+    }
+    if (token !== state.requestToken || state.activeCollectJobId !== jobId) {
+      return;
+    }
+
+    if (data.status === "completed") {
+      renderWarnings(data.warnings || []);
+      await searchBrandProfile(profile, {
+        brandId,
+        token,
+        busyMessage: "Sonuclar son kez guncelleniyor",
+      });
+      statusText.textContent = "Tum veriler yuklendi";
+      setBusy(false, statusText.textContent);
+      clearCollectPolling();
+      return;
+    }
+
+    if (data.status === "failed") {
+      renderWarnings([data.error || "Arka plan taramasi basarisiz"]);
+      statusText.textContent = "Arka plan taramasi basarisiz";
+      setBusy(false, statusText.textContent);
+      clearCollectPolling();
+      return;
+    }
+
+    await searchBrandProfile(profile, {
+      brandId,
+      token,
+      busyMessage: "Ilk sonuclar getiriliyor",
+    });
+    statusText.textContent = `Arka planda taraniyor (${data.items_written || 0} kayit hazir)`;
+    setBusy(false, statusText.textContent);
+    state.collectPollTimer = setTimeout(() => {
+      pollCollectionJob(jobId, profile, { brandId, token });
+    }, 3000);
+  } catch (error) {
+    if (token === state.requestToken) {
+      renderWarnings([error.message]);
+      statusText.textContent = "Arka plan taramasi izlenemedi";
+      setBusy(false, statusText.textContent);
+      clearCollectPolling();
+    }
+  }
+}
+
 async function collectBrandProfile(profile, options = {}) {
   const {
     brandId = null,
@@ -620,6 +831,7 @@ async function collectBrandProfile(profile, options = {}) {
       to: profile.requested_to,
       platforms: profile.platforms,
       brand_id: brandId,
+      background: true,
     }),
   });
   const data = await response.json();
@@ -630,9 +842,16 @@ async function collectBrandProfile(profile, options = {}) {
     return;
   }
 
-  renderWarnings(data.warnings || []);
-  statusText.textContent = "Yeni veri bulundu, ekran guncelleniyor";
-  await searchBrandProfile(profile, { brandId, token, busyMessage: statusText.textContent });
+  renderWarnings([]);
+  clearCollectPolling();
+  state.activeCollectJobId = data.job_id || null;
+  statusText.textContent = "Ilk sonuclar hazirlaniyor";
+  setBusy(false, statusText.textContent);
+  if (state.activeCollectJobId) {
+    state.collectPollTimer = setTimeout(() => {
+      pollCollectionJob(state.activeCollectJobId, profile, { brandId, token });
+    }, 1500);
+  }
 }
 
 async function queueBrandRefresh(profile, brandId, token) {
@@ -648,6 +867,7 @@ async function queueBrandRefresh(profile, brandId, token) {
 }
 
 async function activateBrand(brandId, { refresh = true } = {}) {
+  clearCollectPolling();
   state.activeBrandId = brandId;
   const brand = getActiveBrand();
   if (!brand) {
@@ -701,6 +921,7 @@ async function saveActiveBrandAndRefresh() {
         name: brand.name,
         query: profile.query_text,
         official_youtube_url: profile.official_youtube_url,
+        official_facebook_url: profile.official_facebook_url,
         from: profile.requested_from,
         to: profile.requested_to,
         platforms: profile.platforms,
@@ -713,7 +934,7 @@ async function saveActiveBrandAndRefresh() {
 
     mergeBrand(data);
     updateActiveBrandHeader(getActiveBrand());
-    await activateBrand(data.id, { refresh: false });
+    await activateBrand(data.id, { refresh: true });
   } catch (error) {
     renderWarnings([error.message]);
     statusText.textContent = "Filtre kaydedilemedi";
@@ -771,6 +992,127 @@ async function createBrand() {
   }
 }
 
+async function createApiSource() {
+  if (!API_SOURCES_UI_ENABLED) {
+    return;
+  }
+  const name = apiSourceNameInput.value.trim();
+  const urlTemplate = apiSourceUrlTemplateInput.value.trim();
+  const fieldMappingJson = apiSourceFieldMappingJsonInput.value.trim();
+
+  if (!name) {
+    statusText.textContent = "API kaynak adi gerekli";
+    return;
+  }
+  if (!urlTemplate) {
+    statusText.textContent = "Endpoint URL gerekli";
+    return;
+  }
+  if (!fieldMappingJson) {
+    statusText.textContent = "Alan esleme JSON gerekli";
+    return;
+  }
+
+  setBusy(true, "API kaynagi ekleniyor");
+  try {
+    const response = await fetch("/api/api-sources", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name,
+          platform: apiSourcePlatformInput.value,
+          method: apiSourceMethodInput.value,
+          url_template: urlTemplate,
+          results_path: apiSourceResultsPathInput.value.trim() || null,
+          headers_json: apiSourceHeadersJsonInput.value.trim() || "{}",
+          body_template: apiSourceBodyTemplateInput.value.trim() || null,
+          field_mapping_json: fieldMappingJson,
+          pagination_json: apiSourcePaginationJsonInput.value.trim() || "{}",
+          is_enabled: apiSourceEnabledInput.checked,
+        }),
+      });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || "API kaynagi eklenemedi");
+    }
+
+    apiSourceNameInput.value = "";
+    apiSourceUrlTemplateInput.value = "";
+    apiSourceResultsPathInput.value = "";
+    apiSourceHeadersJsonInput.value = "";
+    apiSourceBodyTemplateInput.value = "";
+    apiSourceFieldMappingJsonInput.value = "";
+    apiSourcePaginationJsonInput.value = "";
+    apiSourceMethodInput.value = "GET";
+    apiSourcePlatformInput.value = "facebook";
+    apiSourceEnabledInput.checked = true;
+
+    mergeApiSource(data);
+    renderApiSourceList();
+    renderWarnings([]);
+    statusText.textContent = "API kaynagi eklendi";
+    setBusy(false, statusText.textContent);
+  } catch (error) {
+    renderWarnings([error.message]);
+    statusText.textContent = "API kaynagi eklenemedi";
+    setBusy(false, statusText.textContent);
+  }
+}
+
+async function toggleApiSource(sourceId, isEnabled) {
+  if (!API_SOURCES_UI_ENABLED) {
+    return;
+  }
+  setBusy(true, "API kaynagi guncelleniyor");
+  try {
+    const response = await fetch(`/api/api-sources/${sourceId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ is_enabled: isEnabled }),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || "API kaynagi guncellenemedi");
+    }
+
+    mergeApiSource(data);
+    renderApiSourceList();
+    renderWarnings([]);
+    statusText.textContent = isEnabled ? "API kaynagi aktif edildi" : "API kaynagi pasife alindi";
+    setBusy(false, statusText.textContent);
+  } catch (error) {
+    renderWarnings([error.message]);
+    statusText.textContent = "API kaynagi guncellenemedi";
+    setBusy(false, statusText.textContent);
+  }
+}
+
+async function deleteApiSource(sourceId) {
+  if (!API_SOURCES_UI_ENABLED) {
+    return;
+  }
+  setBusy(true, "API kaynagi siliniyor");
+  try {
+    const response = await fetch(`/api/api-sources/${sourceId}`, {
+      method: "DELETE",
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || "API kaynagi silinemedi");
+    }
+
+    removeApiSource(sourceId);
+    renderApiSourceList();
+    renderWarnings([]);
+    statusText.textContent = "API kaynagi silindi";
+    setBusy(false, statusText.textContent);
+  } catch (error) {
+    renderWarnings([error.message]);
+    statusText.textContent = "API kaynagi silinemedi";
+    setBusy(false, statusText.textContent);
+  }
+}
+
 async function deleteBrand() {
   const brandId = state.pendingDeleteBrandId;
   const brand = getBrandById(brandId);
@@ -814,6 +1156,7 @@ async function deleteBrand() {
 async function bootstrap() {
   try {
     await fetchBrands();
+    await fetchApiSources();
     updateActiveBrandHeader(null);
     populateBrandForm(null);
     setBrandWorkspaceEnabled(false);
@@ -852,6 +1195,13 @@ brandCreateForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   await createBrand();
 });
+
+if (API_SOURCES_UI_ENABLED && apiSourceForm) {
+  apiSourceForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await createApiSource();
+  });
+}
 
 brandFilterInput.addEventListener("input", renderBrandList);
 
@@ -908,6 +1258,28 @@ resultsList.addEventListener("click", async (event) => {
     statusText.textContent = "Okundu durumu kaydedilemedi";
   }
 });
+
+if (API_SOURCES_UI_ENABLED && apiSourceList) {
+  apiSourceList.addEventListener("click", async (event) => {
+    const toggleButton = event.target.closest("[data-api-source-toggle-id]");
+    if (toggleButton) {
+      const sourceId = Number(toggleButton.dataset.apiSourceToggleId);
+      const currentEnabled = toggleButton.dataset.apiSourceEnabled === "1";
+      if (sourceId) {
+        await toggleApiSource(sourceId, !currentEnabled);
+      }
+      return;
+    }
+
+    const deleteButton = event.target.closest("[data-api-source-delete-id]");
+    if (deleteButton) {
+      const sourceId = Number(deleteButton.dataset.apiSourceDeleteId);
+      if (sourceId) {
+        await deleteApiSource(sourceId);
+      }
+    }
+  });
+}
 
 deleteBrandCancelButton.addEventListener("click", () => {
   closeDeleteBrandModal();

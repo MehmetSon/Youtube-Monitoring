@@ -37,6 +37,7 @@ DEFAULT_BRAND_PROFILES = [
         "query_text": "carrefoursa, karfur, carrefur",
         "platforms": ["youtube"],
         "official_youtube_url": "https://www.youtube.com/channel/UCGsFWBIV1mQBmOl919Q606w",
+        "official_facebook_url": None,
         "requested_from": None,
         "requested_to": None,
     },
@@ -45,6 +46,7 @@ DEFAULT_BRAND_PROFILES = [
         "query_text": "trendyol",
         "platforms": ["youtube"],
         "official_youtube_url": "https://www.youtube.com/channel/UCWUkAPLGDjfsH-_LCEOGOEQ",
+        "official_facebook_url": None,
         "requested_from": None,
         "requested_to": None,
     },
@@ -101,6 +103,17 @@ def _brand_row_to_dict(row: object | None) -> dict[str, object] | None:
     return payload
 
 
+def _external_api_source_row_to_dict(row: object | None) -> dict[str, object] | None:
+    if row is None:
+        return None
+    payload = dict(row)
+    payload["headers"] = json.loads(payload.pop("headers_json") or "{}")
+    payload["field_mapping"] = json.loads(payload.pop("field_mapping_json") or "{}")
+    payload["pagination"] = json.loads(payload.pop("pagination_json") or "{}")
+    payload["is_enabled"] = bool(payload.get("is_enabled"))
+    return payload
+
+
 def ensure_default_brand_profiles() -> None:
     db = get_db()
     now = utcnow_iso()
@@ -112,17 +125,23 @@ def ensure_default_brand_profiles() -> None:
                 query_text,
                 platforms_json,
                 official_youtube_url,
+                official_facebook_url,
                 requested_from,
                 requested_to,
                 created_at,
                 updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(name) DO UPDATE SET
                 official_youtube_url = CASE
                     WHEN brand_profiles.official_youtube_url IS NULL OR brand_profiles.official_youtube_url = ''
                     THEN excluded.official_youtube_url
                     ELSE brand_profiles.official_youtube_url
+                END,
+                official_facebook_url = CASE
+                    WHEN brand_profiles.official_facebook_url IS NULL OR brand_profiles.official_facebook_url = ''
+                    THEN excluded.official_facebook_url
+                    ELSE brand_profiles.official_facebook_url
                 END
             """,
             (
@@ -130,6 +149,7 @@ def ensure_default_brand_profiles() -> None:
                 brand["query_text"],
                 json.dumps(_normalize_platforms(brand["platforms"])),
                 brand.get("official_youtube_url"),
+                brand.get("official_facebook_url"),
                 brand.get("requested_from"),
                 brand.get("requested_to"),
                 now,
@@ -149,6 +169,7 @@ def list_brand_profiles() -> list[dict[str, object]]:
             query_text,
             platforms_json,
             official_youtube_url,
+            official_facebook_url,
             requested_from,
             requested_to,
             last_result_count,
@@ -172,6 +193,7 @@ def get_brand_profile(brand_id: int) -> dict[str, object] | None:
             query_text,
             platforms_json,
             official_youtube_url,
+            official_facebook_url,
             requested_from,
             requested_to,
             last_result_count,
@@ -192,6 +214,7 @@ def create_brand_profile(
     query_text: str,
     platforms: Iterable[str] | None,
     official_youtube_url: str | None,
+    official_facebook_url: str | None,
     requested_from: str | None,
     requested_to: str | None,
 ) -> dict[str, object]:
@@ -204,18 +227,20 @@ def create_brand_profile(
             query_text,
             platforms_json,
             official_youtube_url,
+            official_facebook_url,
             requested_from,
             requested_to,
             created_at,
             updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             name.strip(),
             query_text.strip(),
             json.dumps(_normalize_platforms(platforms)),
             (official_youtube_url or "").strip() or None,
+            (official_facebook_url or "").strip() or None,
             requested_from,
             requested_to,
             now,
@@ -233,6 +258,7 @@ def update_brand_profile(
     query_text: str,
     platforms: Iterable[str] | None,
     official_youtube_url: str | None,
+    official_facebook_url: str | None,
     requested_from: str | None,
     requested_to: str | None,
 ) -> dict[str, object] | None:
@@ -245,6 +271,7 @@ def update_brand_profile(
             query_text = ?,
             platforms_json = ?,
             official_youtube_url = ?,
+            official_facebook_url = ?,
             requested_from = ?,
             requested_to = ?,
             updated_at = ?
@@ -255,6 +282,7 @@ def update_brand_profile(
             query_text.strip(),
             json.dumps(_normalize_platforms(platforms)),
             (official_youtube_url or "").strip() or None,
+            (official_facebook_url or "").strip() or None,
             requested_from,
             requested_to,
             utcnow_iso(),
@@ -273,6 +301,164 @@ def delete_brand_profile(brand_id: int) -> bool:
         WHERE id = ?
         """,
         (brand_id,),
+    )
+    db.commit()
+    return bool(getattr(cursor, "rowcount", 0))
+
+
+def list_external_api_sources(*, platform: str | None = None, enabled_only: bool = False) -> list[dict[str, object]]:
+    db = get_db()
+    where_parts: list[str] = []
+    params: list[object] = []
+    if platform:
+        where_parts.append("platform = ?")
+        params.append(platform.strip().lower())
+    if enabled_only:
+        where_parts.append("is_enabled = ?")
+        params.append(True)
+
+    where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+    rows = db.execute(
+        f"""
+        SELECT
+            id,
+            name,
+            platform,
+            method,
+            url_template,
+            headers_json,
+            body_template,
+            results_path,
+            field_mapping_json,
+            pagination_json,
+            is_enabled,
+            created_at,
+            updated_at
+        FROM external_api_sources
+        {where_sql}
+        ORDER BY lower(platform) ASC, lower(name) ASC
+        """,
+        tuple(params),
+    ).fetchall()
+    return [_external_api_source_row_to_dict(row) for row in rows if row is not None]
+
+
+def create_external_api_source(
+    *,
+    name: str,
+    platform: str,
+    method: str,
+    url_template: str,
+    headers: dict[str, object] | None,
+    body_template: str | None,
+    results_path: str | None,
+    field_mapping: dict[str, object],
+    pagination: dict[str, object] | None,
+    is_enabled: bool,
+) -> dict[str, object]:
+    db = get_db()
+    now = utcnow_iso()
+    source_id = db.insert_and_get_id(
+        """
+        INSERT INTO external_api_sources (
+            name,
+            platform,
+            method,
+            url_template,
+            headers_json,
+            body_template,
+            results_path,
+            field_mapping_json,
+            pagination_json,
+            is_enabled,
+            created_at,
+            updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            name.strip(),
+            platform.strip().lower(),
+            method.strip().upper(),
+            url_template.strip(),
+            json.dumps(headers or {}, ensure_ascii=False),
+            (body_template or "").strip() or None,
+            (results_path or "").strip() or None,
+            json.dumps(field_mapping or {}, ensure_ascii=False),
+            json.dumps(pagination or {}, ensure_ascii=False),
+            is_enabled,
+            now,
+            now,
+        ),
+    )
+    db.commit()
+    row = db.execute(
+        """
+        SELECT
+            id,
+            name,
+            platform,
+            method,
+            url_template,
+            headers_json,
+            body_template,
+            results_path,
+            field_mapping_json,
+            pagination_json,
+            is_enabled,
+            created_at,
+            updated_at
+        FROM external_api_sources
+        WHERE id = ?
+        """,
+        (source_id,),
+    ).fetchone()
+    return _external_api_source_row_to_dict(row) or {}
+    
+
+def set_external_api_source_enabled(source_id: int, is_enabled: bool) -> dict[str, object] | None:
+    db = get_db()
+    db.execute(
+        """
+        UPDATE external_api_sources
+        SET is_enabled = ?, updated_at = ?
+        WHERE id = ?
+        """,
+        (is_enabled, utcnow_iso(), source_id),
+    )
+    db.commit()
+    row = db.execute(
+        """
+        SELECT
+            id,
+            name,
+            platform,
+            method,
+            url_template,
+            headers_json,
+            body_template,
+            results_path,
+            field_mapping_json,
+            pagination_json,
+            is_enabled,
+            created_at,
+            updated_at
+        FROM external_api_sources
+        WHERE id = ?
+        """,
+        (source_id,),
+    ).fetchone()
+    return _external_api_source_row_to_dict(row)
+
+
+def delete_external_api_source(source_id: int) -> bool:
+    db = get_db()
+    cursor = db.execute(
+        """
+        DELETE FROM external_api_sources
+        WHERE id = ?
+        """,
+        (source_id,),
     )
     db.commit()
     return bool(getattr(cursor, "rowcount", 0))
@@ -495,7 +681,7 @@ def search_content(
             if variant_clauses:
                 term_clauses.append("(" + " OR ".join(variant_clauses) + ")")
         if term_clauses:
-            where_parts.append("(" + " OR ".join(term_clauses) + ")")
+            where_parts.append("((source_kind LIKE 'owned-%') OR (" + " OR ".join(term_clauses) + "))")
 
     if platforms:
         placeholders = ", ".join(["?"] * len(platforms))

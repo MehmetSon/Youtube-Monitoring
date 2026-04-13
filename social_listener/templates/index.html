@@ -4,9 +4,9 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Signal Desk</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='20260330d') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='20260331b') }}">
   </head>
-  <body>
+  <body data-api-sources-ui="{{ 'true' if show_api_source_ui else 'false' }}">
     <div class="workspace-ribbon">
       <span class="workspace-ribbon-name">Mehmet Kabak</span>
       <span class="workspace-ribbon-separator">|</span>
@@ -95,6 +95,17 @@
               <small class="field-hint">Buraya sadece tek bir resmi YouTube kanal linki girin.</small>
             </label>
 
+            <label class="field">
+              <span>Markanin resmi Facebook sayfasi</span>
+              <input
+                id="official-facebook-url"
+                name="official_facebook_url"
+                type="url"
+                placeholder="https://www.facebook.com/marka"
+              >
+              <small class="field-hint">Buraya sadece tek bir resmi Facebook sayfa linki girin. Apify posts ve reels taramasi bu linki kullanir.</small>
+            </label>
+
             <div class="field-grid">
               <label class="field">
                 <span>Baslangic</span>
@@ -119,6 +130,97 @@
             </div>
           </form>
         </section>
+
+        {% if show_api_source_ui %}
+        <section class="filter-panel api-source-panel">
+          <div class="filter-panel-head">
+            <div>
+              <p class="panel-kicker">API Sources</p>
+              <h2>Harici API kaynaklari</h2>
+            </div>
+          </div>
+
+          <form id="api-source-form" class="api-source-form">
+            <div class="field-grid api-source-grid">
+              <label class="field">
+                <span>Kaynak adi</span>
+                <input id="api-source-name" type="text" placeholder="Ornek: RapidAPI Facebook Search">
+              </label>
+
+              <label class="field">
+                <span>Platform</span>
+                <select id="api-source-platform">
+                  <option value="facebook">Facebook</option>
+                  <option value="instagram">Instagram</option>
+                  <option value="youtube">YouTube</option>
+                  <option value="linkedin">LinkedIn</option>
+                </select>
+              </label>
+
+              <label class="field">
+                <span>Method</span>
+                <select id="api-source-method">
+                  <option value="GET">GET</option>
+                  <option value="POST">POST</option>
+                </select>
+              </label>
+            </div>
+
+            <label class="field">
+              <span>Endpoint URL sablonu</span>
+              <input id="api-source-url-template" type="text" placeholder="https://example.com/search?query={query}">
+              <small class="field-hint">{query}, {from}, {to} degiskenlerini kullanabilirsiniz.</small>
+            </label>
+
+            <div class="field-grid api-source-grid">
+              <label class="field">
+                <span>Sonuc yolu</span>
+                <input id="api-source-results-path" type="text" placeholder="data.items">
+                <small class="field-hint">Bos birakirsaniz tum JSON koku kullanilir.</small>
+              </label>
+
+              <div class="field field-toggle">
+                <span>Durum</span>
+                <label class="toggle-row">
+                  <input id="api-source-enabled" type="checkbox" checked>
+                  <span>Kaynak aktif</span>
+                </label>
+              </div>
+            </div>
+
+            <label class="field">
+              <span>Header JSON</span>
+              <textarea id="api-source-headers-json" rows="4" placeholder='{"x-rapidapi-key":"KEY","x-rapidapi-host":"facebook-scraper3.p.rapidapi.com"}'></textarea>
+            </label>
+
+            <label class="field">
+              <span>Body JSON</span>
+              <textarea id="api-source-body-template" rows="4" placeholder='{"query":"{query}"}'></textarea>
+              <small class="field-hint">GET icin bos birakabilirsiniz.</small>
+            </label>
+
+            <label class="field">
+              <span>Alan esleme JSON</span>
+              <textarea id="api-source-field-mapping-json" rows="8" placeholder='{"external_id":"id","title":"name","body_text":"description","content_url":"url","permalink":"url","source_name":"name","published_at":"created_at","thumbnail_url":"image"}'></textarea>
+              <small class="field-hint">Desteklenen ana alanlar: external_id, title, body_text, content_url, permalink, source_name, author_name, published_at, thumbnail_url, content_type, language, view_count, like_count, comment_count.</small>
+            </label>
+
+            <label class="field">
+              <span>Sayfalama JSON</span>
+              <textarea id="api-source-pagination-json" rows="5" placeholder='{"cursor_path":"cursor","inject_into":"query","param_name":"cursor","max_pages":5}'></textarea>
+              <small class="field-hint">Opsiyonel. Cursor kullanan API'lerde sonraki sayfalari cekmek icin kullanilir.</small>
+            </label>
+
+            <div class="actions">
+              <button type="submit" class="primary">API kaynagi ekle</button>
+            </div>
+          </form>
+
+          <div id="api-source-list" class="api-source-list">
+            <article class="brand-empty">API kaynaklari yukleniyor...</article>
+          </div>
+        </section>
+        {% endif %}
 
         <section class="summary-strip" id="summary-strip">
           <div class="metric">
@@ -163,6 +265,6 @@
       </div>
     </div>
 
-    <script src="{{ url_for('static', filename='app.js', v='20260330d') }}" defer></script>
+    <script src="{{ url_for('static', filename='app.js', v='20260331b') }}" defer></script>
   </body>
 </html>

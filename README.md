@@ -35,6 +35,13 @@ Ardindan tarayicida `http://127.0.0.1:5000` adresini acin.
 - `APP_TARGET_LANGUAGE`: hedef dil kodu, varsayilan `tr`
 - `APP_TARGET_REGION`: hedef ulke kodu, varsayilan `TR`
 - `APP_STRICT_LANGUAGE_FILTER`: `true` ise uygulama Turkce olmayan icerikleri ikinci bir filtreyle eler
+- `APIFY_TOKEN`: Apify API token'i; resmi Facebook sayfasi icin posts + reels toplayici bunu kullanir
+- `APIFY_FACEBOOK_SEARCH_ACTOR_ID`: Facebook mention/keyword aramasi icin actor kimligi
+- `APIFY_FACEBOOK_POSTS_ACTOR_ID`: varsayilan Facebook posts actor kimligi
+- `APIFY_FACEBOOK_REELS_ACTOR_ID`: varsayilan Facebook reels actor kimligi
+- `APIFY_FACEBOOK_SEARCH_LIMIT`: mention aramasinda cekilecek maksimum sonuc sayisi
+- `APIFY_FACEBOOK_POSTS_LIMIT`: resmi Facebook sayfasindan cekilecek maksimum post sayisi
+- `APIFY_FACEBOOK_REELS_LIMIT`: resmi Facebook sayfasindan cekilecek maksimum reel sayisi
 - `WEB_CONCURRENCY`: Gunicorn worker sayisi
 - `GUNICORN_BIND`: Gunicorn bind adresi, varsayilan `0.0.0.0:$PORT`
 - `GUNICORN_THREADS`: Gunicorn thread sayisi
@@ -48,7 +55,8 @@ Ardindan tarayicida `http://127.0.0.1:5000` adresini acin.
 ## Simdiki sinirlar
 
 - YouTube adaptoru anahtar varsa gercek arama yapar ve yorum toplar
-- Facebook, Instagram ve LinkedIn adaptorleri iskelet durumundadir
+- Facebook tarafinda Apify ile hem mention/keyword aramasi hem de resmi sayfa URL'si girildiyse posts + reels tek listede toplanabilir
+- Instagram ve LinkedIn adaptorleri halen iskelet durumundadir
 - Yorum toplama ilk surumde YouTube ile baglidir; diger platformlarda henuz gercek connector yoktur
 
 ## YouTube'u gercek veriye acmak
@@ -63,6 +71,13 @@ APP_ENABLE_DEMO_DATA=false
 APP_TARGET_LANGUAGE=tr
 APP_TARGET_REGION=TR
 APP_STRICT_LANGUAGE_FILTER=true
+APIFY_TOKEN=your-apify-token
+APIFY_FACEBOOK_SEARCH_ACTOR_ID=scraper_one/facebook-posts-search
+APIFY_FACEBOOK_POSTS_ACTOR_ID=apify/facebook-posts-scraper
+APIFY_FACEBOOK_REELS_ACTOR_ID=apify/facebook-reels-scraper
+APIFY_FACEBOOK_SEARCH_LIMIT=50
+APIFY_FACEBOOK_POSTS_LIMIT=25
+APIFY_FACEBOOK_REELS_LIMIT=25
 YOUTUBE_API_KEY=your-key
 YOUTUBE_MAX_RESULTS=50
 YOUTUBE_MAX_PAGES=3

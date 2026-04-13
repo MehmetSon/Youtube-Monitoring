@@ -1,20 +1,59 @@
 from __future__ import annotations
 
+import hashlib
 import html
 import json
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode, urlparse
+from urllib.parse import parse_qsl, quote, quote_plus, urlencode, urlparse, urlunparse
 from urllib.request import Request, urlopen
 
 from langdetect import DetectorFactory, LangDetectException, detect
 
 from ..config import Settings
+from ..repository import list_external_api_sources
 
 DetectorFactory.seed = 0
+
+
+def _read_http_error_body(exc: HTTPError) -> str:
+    try:
+        return exc.read().decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
+def _build_apify_http_error(actor_id: str, exc: HTTPError, *, action: str) -> str:
+    body = _read_http_error_body(exc)
+    try:
+        payload = json.loads(body) if body else {}
+    except json.JSONDecodeError:
+        payload = {}
+
+    error = payload.get("error") if isinstance(payload, dict) else None
+    error_type = str(error.get("type") or "").strip() if isinstance(error, dict) else ""
+    error_message = str(error.get("message") or "").strip() if isinstance(error, dict) else ""
+    normalized = f"{error_type} {error_message}".lower()
+
+    if "monthly usage hard limit exceeded" in normalized:
+        return f"Apify {actor_id}: aylik Apify limiti doldu."
+
+    if "insufficient" in normalized or "forbidden" in normalized:
+        return f"Apify {actor_id}: erisim izni reddedildi ({exc.code})."
+
+    if error_message:
+        return f"Apify {actor_id}: {action} basarisiz ({exc.code}) - {error_message}."
+
+    return f"Apify {actor_id}: {action} basarisiz ({exc.code})."
+
+
+def _is_apify_quota_warning(message: str) -> bool:
+    return "aylik apify limiti doldu" in normalize_text(message)
 
 
 def utcnow() -> datetime:
@@ -102,7 +141,8 @@ def term_matches_text(term: str, text: str) -> bool:
 def item_matches_terms(item: dict[str, object], terms: list[str]) -> bool:
     if not terms:
         return True
-    if item.get("source_kind") == "owned-channel":
+    source_kind = str(item.get("source_kind") or "")
+    if source_kind.startswith("owned-"):
         return True
 
     match_text = build_match_text(item)
@@ -206,6 +246,21 @@ def parse_datetime(value: str | None) -> datetime | None:
     cleaned = value.strip()
     if not cleaned:
         return None
+    if re.fullmatch(r"\d{10}(?:\.\d+)?", cleaned):
+        try:
+            return datetime.fromtimestamp(float(cleaned), tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
+    if re.fullmatch(r"\d{13}", cleaned):
+        try:
+            return datetime.fromtimestamp(int(cleaned) / 1000, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
+    if re.fullmatch(r"\d{8}", cleaned):
+        try:
+            return datetime.strptime(cleaned, "%Y%m%d").replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
     if cleaned.endswith("Z"):
         cleaned = cleaned[:-1] + "+00:00"
     try:
@@ -323,6 +378,195 @@ class OwnedYouTubeChannel:
     aliases: tuple[str, ...]
     channel_id: str
     title: str
+
+
+@dataclass(frozen=True)
+class ExternalApiSourceConfig:
+    id: int
+    name: str
+    platform: str
+    method: str
+    url_template: str
+    headers: dict[str, object]
+    body_template: str | None
+    results_path: str | None
+    field_mapping: dict[str, object]
+    pagination: dict[str, object]
+    is_enabled: bool
+
+
+def _resolve_path(payload: object, path: str | None) -> object | None:
+    if payload is None:
+        return None
+    if not path:
+        return payload
+
+    current = payload
+    for part in [piece for piece in path.split(".") if piece]:
+        if isinstance(current, dict):
+            current = current.get(part)
+        elif isinstance(current, list):
+            if not part.isdigit():
+                return None
+            index = int(part)
+            if index < 0 or index >= len(current):
+                return None
+            current = current[index]
+        else:
+            return None
+    return current
+
+
+def _apply_template_string(value: str, context: dict[str, str]) -> str:
+    rendered = value
+    for key, replacement in context.items():
+        rendered = rendered.replace(f"{{{key}}}", replacement)
+    return rendered
+
+
+def _apply_template_payload(value: object, context: dict[str, str]) -> object:
+    if isinstance(value, str):
+        return _apply_template_string(value, context)
+    if isinstance(value, list):
+        return [_apply_template_payload(item, context) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _apply_template_payload(item, context) for key, item in value.items()}
+    return value
+
+
+def _extract_mapped_value(payload: object, mapping_value: object) -> object | None:
+    if mapping_value is None:
+        return None
+    if isinstance(mapping_value, list):
+        for candidate in mapping_value:
+            resolved = _extract_mapped_value(payload, candidate)
+            if resolved not in (None, "", [], {}):
+                return resolved
+        return None
+    if isinstance(mapping_value, str) and mapping_value.startswith("literal:"):
+        return mapping_value.removeprefix("literal:")
+    if isinstance(mapping_value, str):
+        return _resolve_path(payload, mapping_value)
+    return mapping_value
+
+
+def _stringify_value(value: object | None) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        return text or None
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
+def _append_query_params(url: str, extra_params: dict[str, str]) -> str:
+    parsed = urlparse(url)
+    existing = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    existing.update({key: value for key, value in extra_params.items() if value is not None})
+    return urlunparse(parsed._replace(query=urlencode(existing, doseq=True)))
+
+
+def _format_date_param(value: str | None, timezone_name: str = "Europe/Istanbul") -> str | None:
+    parsed = parse_datetime(value)
+    if parsed is None:
+        return None
+    try:
+        localized = parsed.astimezone(ZoneInfo(timezone_name))
+    except Exception:
+        localized = parsed
+    return localized.date().isoformat()
+
+
+def _extract_facebook_page_markers(raw_url: str | None) -> dict[str, str | None]:
+    if not raw_url:
+        return {"url": None, "slug": None, "profile_id": None}
+
+    try:
+        parsed = urlparse(raw_url.strip())
+    except ValueError:
+        return {"url": None, "slug": None, "profile_id": None}
+
+    host = (parsed.netloc or "").lower().removeprefix("www.")
+    if "facebook.com" not in host:
+        return {"url": None, "slug": None, "profile_id": None}
+
+    path_parts = [part for part in parsed.path.split("/") if part]
+    slug: str | None = None
+    profile_id: str | None = None
+
+    if path_parts:
+        first = path_parts[0]
+        if first == "profile.php":
+            query_params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+            profile_id = query_params.get("id") or None
+        elif first != "pages":
+            slug = first
+        elif len(path_parts) >= 3:
+            slug = path_parts[1] or None
+            profile_id = path_parts[2] or None
+
+    canonical = None
+    if slug:
+        canonical = f"https://www.facebook.com/{slug}"
+    elif profile_id:
+        canonical = f"https://www.facebook.com/profile.php?id={profile_id}"
+
+    return {
+        "url": canonical,
+        "slug": slug.lower() if slug else None,
+        "profile_id": profile_id,
+    }
+
+
+def _facebook_author_matches(record: dict[str, object], brand_profile: dict[str, object] | None) -> bool:
+    if not brand_profile:
+        return False
+
+    markers = _extract_facebook_page_markers(str(brand_profile.get("official_facebook_url") or "").strip())
+    official_slug = (markers.get("slug") or "").lower()
+    official_profile_id = str(markers.get("profile_id") or "").strip()
+    official_canonical = (markers.get("url") or "").rstrip("/").lower()
+    brand_name = normalize_text(str(brand_profile.get("name") or "")).lower()
+
+    author = record.get("author") if isinstance(record.get("author"), dict) else {}
+    author_url = str(author.get("url") or "").rstrip("/").lower()
+    author_name = normalize_text(str(author.get("name") or "")).lower()
+    author_id = str(author.get("id") or "").strip()
+
+    if official_canonical and author_url == official_canonical:
+        return True
+    if official_slug and author_url.endswith(f"/{official_slug}"):
+        return True
+    if official_profile_id and author_id == official_profile_id:
+        return True
+    if official_slug and author_name == official_slug:
+        return True
+    if brand_name and author_name == brand_name:
+        return True
+    return False
+
+
+def _first_attachment_media_url(record: dict[str, object]) -> str | None:
+    attachments = record.get("attachments")
+    if not isinstance(attachments, list):
+        return None
+    for attachment in attachments:
+        if not isinstance(attachment, dict):
+            continue
+        url = _stringify_value(attachment.get("thumbnailUrl"))
+        if url:
+            return url
+        url = _stringify_value(attachment.get("image"))
+        if url:
+            return url
+        url = _stringify_value(attachment.get("url"))
+        if url:
+            return url
+    return None
 
 
 class BaseAdapter:
@@ -1143,6 +1387,974 @@ class YouTubeAdapter(BaseAdapter):
         return AdapterResult(items=items, warnings=warnings)
 
 
+class CompositeAdapter(BaseAdapter):
+    def __init__(self, platform: str, adapters: list[BaseAdapter]) -> None:
+        self.platform = platform
+        self.adapters = adapters
+
+    def collect_iter(
+        self,
+        terms: list[str],
+        requested_from: str | None,
+        requested_to: str | None,
+        *,
+        brand_profile: dict[str, object] | None = None,
+    ):
+        for adapter in self.adapters:
+            if hasattr(adapter, "collect_iter"):
+                for result in adapter.collect_iter(
+                    terms,
+                    requested_from,
+                    requested_to,
+                    brand_profile=brand_profile,
+                ):
+                    yield result
+                    if any(_is_apify_quota_warning(message) for message in result.warnings):
+                        return
+            else:
+                result = adapter.collect(
+                    terms,
+                    requested_from,
+                    requested_to,
+                    brand_profile=brand_profile,
+                )
+                yield result
+                if any(_is_apify_quota_warning(message) for message in result.warnings):
+                    return
+
+    def collect(
+        self,
+        terms: list[str],
+        requested_from: str | None,
+        requested_to: str | None,
+        *,
+        brand_profile: dict[str, object] | None = None,
+    ) -> AdapterResult:
+        items: list[dict[str, object]] = []
+        warnings: list[str] = []
+        allow_demo_fallback = False
+        for result in self.collect_iter(
+            terms,
+            requested_from,
+            requested_to,
+            brand_profile=brand_profile,
+        ):
+            items.extend(result.items)
+            warnings.extend(result.warnings)
+            allow_demo_fallback = allow_demo_fallback or result.allow_demo_fallback
+        return AdapterResult(
+            items=items,
+            warnings=warnings,
+            allow_demo_fallback=allow_demo_fallback and not items,
+        )
+
+
+class ApifyFacebookSearchAdapter(BaseAdapter):
+    platform = "facebook"
+    source_kind = "custom-api"
+
+    def __init__(
+        self,
+        *,
+        token: str | None,
+        actor_id: str,
+        results_limit: int,
+    ) -> None:
+        self.token = (token or "").strip() or None
+        self.actor_id = actor_id.strip()
+        self.results_limit = max(1, min(results_limit, 100))
+
+    def _run_actor(self, payload: dict[str, object]) -> tuple[list[dict[str, object]], list[str]]:
+        if not self.token:
+            return [], []
+
+        actor_key = quote(self.actor_id.replace("/", "~"), safe="~")
+        url = (
+            f"https://api.apify.com/v2/acts/{actor_key}/run-sync-get-dataset-items"
+            f"?token={quote_plus(self.token)}&clean=true&format=json"
+        )
+        request = Request(
+            url,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+
+        try:
+            with urlopen(request, timeout=120) as response:
+                raw_payload = json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            return [], [_build_apify_http_error(self.actor_id, exc, action="API cagrisi")]
+        except URLError as exc:
+            return [], [f"Apify {self.actor_id}: baglanti hatasi ({exc.reason})."]
+        except json.JSONDecodeError:
+            return [], [f"Apify {self.actor_id}: JSON cevabi okunamadi."]
+
+        if isinstance(raw_payload, list):
+            records = raw_payload
+        elif isinstance(raw_payload, dict):
+            records = [raw_payload]
+        else:
+            records = []
+        return [record for record in records if isinstance(record, dict)], []
+
+    def _build_item(
+        self,
+        record: dict[str, object],
+        *,
+        requested_from: str | None,
+        requested_to: str | None,
+        seen_at: str,
+    ) -> dict[str, object] | None:
+        published_raw = _stringify_value(record.get("timestamp"))
+        if not is_between(published_raw, requested_from, requested_to):
+            return None
+        published_dt = parse_datetime(published_raw)
+        author = record.get("author") if isinstance(record.get("author"), dict) else {}
+        source_name = _stringify_value(author.get("name")) or "Facebook"
+        content_url = _stringify_value(record.get("url"))
+        if not content_url:
+            return None
+        external_id = _stringify_value(record.get("postId")) or content_url
+        content_type = "post"
+        attachments = record.get("attachments")
+        if isinstance(attachments, list):
+            for attachment in attachments:
+                if not isinstance(attachment, dict):
+                    continue
+                attachment_type = _stringify_value(attachment.get("type"))
+                if attachment_type in {"video", "reel"}:
+                    content_type = "reel"
+                    break
+                if attachment_type in {"photo", "album"}:
+                    content_type = "post"
+
+        return {
+            "platform": self.platform,
+            "source_kind": self.source_kind,
+            "content_type": content_type,
+            "external_id": external_id,
+            "source_name": source_name,
+            "author_name": _stringify_value(author.get("name")) or source_name,
+            "title": source_name,
+            "body_text": _stringify_value(record.get("postText")),
+            "normalized_text": build_normalized_text(
+                _stringify_value(record.get("postText")),
+                source_name,
+                _stringify_value(author.get("profileUrl")),
+            ),
+            "thumbnail_url": _first_attachment_media_url(record) or _stringify_value(author.get("profilePicture")),
+            "view_count": parse_count(record.get("views")),
+            "like_count": parse_count(record.get("reactionsCount")),
+            "dislike_count": None,
+            "comment_count": parse_count(record.get("commentsCount")),
+            "channel_subscriber_count": None,
+            "content_url": content_url,
+            "permalink": content_url,
+            "language": _stringify_value(record.get("language")),
+            "published_at": isoformat(published_dt) if published_dt else published_raw,
+            "first_seen_at": seen_at,
+            "last_seen_at": seen_at,
+            "raw_payload": {"source": "Apify Facebook Search", "record": record},
+        }
+
+    def collect(
+        self,
+        terms: list[str],
+        requested_from: str | None,
+        requested_to: str | None,
+        *,
+        brand_profile: dict[str, object] | None = None,
+    ) -> AdapterResult:
+        if not self.token or not terms:
+            return AdapterResult(items=[], warnings=[])
+
+        seen_at = isoformat(utcnow())
+        items: list[dict[str, object]] = []
+        warnings: list[str] = []
+        seen_external_ids: set[str] = set()
+        start_date = _format_date_param(requested_from)
+        end_date = _format_date_param(requested_to)
+
+        for term in terms:
+            payload: dict[str, object] = {
+                "query": term,
+                "resultsCount": self.results_limit,
+                "searchType": "latest",
+            }
+            if start_date:
+                payload["startDate"] = start_date
+            if end_date:
+                payload["endDate"] = end_date
+
+            records, actor_warnings = self._run_actor(payload)
+            warnings.extend(actor_warnings)
+            if any(_is_apify_quota_warning(message) for message in actor_warnings):
+                break
+            for record in records:
+                item = self._build_item(
+                    record,
+                    requested_from=requested_from,
+                    requested_to=requested_to,
+                    seen_at=seen_at,
+                )
+                if not item:
+                    continue
+                external_id = str(item.get("external_id") or "")
+                if external_id in seen_external_ids:
+                    continue
+                seen_external_ids.add(external_id)
+                items.append(item)
+
+        return AdapterResult(items=items, warnings=warnings)
+
+
+class ApifyFacebookOfficialAdapter(BaseAdapter):
+    platform = "facebook"
+    source_kind = "owned-page"
+
+    def __init__(
+        self,
+        *,
+        token: str | None,
+        posts_actor_id: str,
+        reels_actor_id: str,
+        posts_limit: int,
+        reels_limit: int,
+    ) -> None:
+        self.token = (token or "").strip() or None
+        self.posts_actor_id = posts_actor_id.strip()
+        self.reels_actor_id = reels_actor_id.strip()
+        self.posts_limit = max(1, min(posts_limit, 100))
+        self.reels_limit = max(1, min(reels_limit, 100))
+
+    def _run_actor(self, actor_id: str, payload: dict[str, object]) -> tuple[list[dict[str, object]], list[str]]:
+        if not self.token:
+            return [], []
+
+        actor_key = quote(actor_id.replace("/", "~"), safe="~")
+        url = (
+            f"https://api.apify.com/v2/acts/{actor_key}/run-sync-get-dataset-items"
+            f"?token={quote_plus(self.token)}&clean=true&format=json"
+        )
+        request = Request(
+            url,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+
+        try:
+            with urlopen(request, timeout=120) as response:
+                raw_payload = json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            return [], [_build_apify_http_error(actor_id, exc, action="API cagrisi")]
+        except URLError as exc:
+            return [], [f"Apify {actor_id}: baglanti hatasi ({exc.reason})."]
+        except json.JSONDecodeError:
+            return [], [f"Apify {actor_id}: JSON cevabi okunamadi."]
+
+        if isinstance(raw_payload, list):
+            records = raw_payload
+        elif isinstance(raw_payload, dict):
+            records = [raw_payload]
+        else:
+            records = []
+        return [record for record in records if isinstance(record, dict)], []
+
+    def _start_actor_run(self, actor_id: str, payload: dict[str, object]) -> tuple[dict[str, object] | None, list[str]]:
+        if not self.token:
+            return None, []
+
+        actor_key = quote(actor_id.replace("/", "~"), safe="~")
+        url = f"https://api.apify.com/v2/acts/{actor_key}/runs?token={quote_plus(self.token)}"
+        request = Request(
+            url,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=120) as response:
+                raw_payload = json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            return None, [_build_apify_http_error(actor_id, exc, action="actor baslatma")]
+        except URLError as exc:
+            return None, [f"Apify {actor_id}: baglanti hatasi ({exc.reason})."]
+        except json.JSONDecodeError:
+            return None, [f"Apify {actor_id}: run cevabi okunamadi."]
+
+        data = raw_payload.get("data") if isinstance(raw_payload, dict) else None
+        if not isinstance(data, dict):
+            return None, [f"Apify {actor_id}: run bilgisi alinamadi."]
+        return data, []
+
+    def _get_actor_run(self, run_id: str) -> tuple[dict[str, object] | None, list[str]]:
+        if not self.token:
+            return None, []
+
+        url = f"https://api.apify.com/v2/actor-runs/{quote(run_id)}?token={quote_plus(self.token)}"
+        try:
+            with urlopen(url, timeout=120) as response:
+                raw_payload = json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            return None, [_build_apify_http_error(f"run {run_id}", exc, action="durum sorgusu")]
+        except URLError as exc:
+            return None, [f"Apify run {run_id}: baglanti hatasi ({exc.reason})."]
+        except json.JSONDecodeError:
+            return None, [f"Apify run {run_id}: JSON cevabi okunamadi."]
+
+        data = raw_payload.get("data") if isinstance(raw_payload, dict) else None
+        if not isinstance(data, dict):
+            return None, [f"Apify run {run_id}: veri bulunamadi."]
+        return data, []
+
+    def _get_dataset_items(
+        self,
+        dataset_id: str,
+        *,
+        offset: int,
+        limit: int,
+    ) -> tuple[list[dict[str, object]], list[str]]:
+        if not self.token:
+            return [], []
+
+        url = (
+            f"https://api.apify.com/v2/datasets/{quote(dataset_id)}/items"
+            f"?token={quote_plus(self.token)}&clean=true&format=json&offset={offset}&limit={limit}"
+        )
+        try:
+            with urlopen(url, timeout=120) as response:
+                raw_payload = json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            return [], [_build_apify_http_error(f"dataset {dataset_id}", exc, action="dataset okuma")]
+        except URLError as exc:
+            return [], [f"Apify dataset {dataset_id}: baglanti hatasi ({exc.reason})."]
+        except json.JSONDecodeError:
+            return [], [f"Apify dataset {dataset_id}: JSON cevabi okunamadi."]
+
+        if isinstance(raw_payload, list):
+            return [item for item in raw_payload if isinstance(item, dict)], []
+        if isinstance(raw_payload, dict):
+            return [raw_payload], []
+        return [], []
+
+    def _stream_actor_records(
+        self,
+        actor_id: str,
+        payload: dict[str, object],
+        *,
+        batch_size: int = 10,
+        poll_interval_seconds: float = 2.0,
+    ):
+        run, warnings = self._start_actor_run(actor_id, payload)
+        if warnings:
+            yield [], warnings
+            return
+        if not run:
+            yield [], [f"Apify {actor_id}: actor baslatilamadi."]
+            return
+
+        run_id = _stringify_value(run.get("id"))
+        dataset_id = _stringify_value(run.get("defaultDatasetId"))
+        if not run_id or not dataset_id:
+            yield [], [f"Apify {actor_id}: run veya dataset kimligi eksik."]
+            return
+
+        offset = 0
+        terminal_statuses = {"SUCCEEDED", "FAILED", "ABORTED", "TIMED-OUT"}
+        while True:
+            items, item_warnings = self._get_dataset_items(dataset_id, offset=offset, limit=batch_size)
+            if item_warnings:
+                yield [], item_warnings
+                return
+            if items:
+                offset += len(items)
+                yield items, []
+
+            run_state, run_warnings = self._get_actor_run(run_id)
+            if run_warnings:
+                yield [], run_warnings
+                return
+
+            status = _stringify_value((run_state or {}).get("status"))
+            if status in terminal_statuses:
+                final_items, final_warnings = self._get_dataset_items(dataset_id, offset=offset, limit=batch_size)
+                if final_warnings:
+                    yield [], final_warnings
+                elif final_items:
+                    yield final_items, []
+                return
+
+            time.sleep(poll_interval_seconds)
+
+    def _brand_page_url(self, brand_profile: dict[str, object] | None) -> str | None:
+        if not brand_profile:
+            return None
+        raw_url = str(brand_profile.get("official_facebook_url") or "").strip()
+        if not raw_url:
+            return None
+        markers = _extract_facebook_page_markers(raw_url)
+        return markers.get("url") or raw_url
+
+    def _build_posts_payload(
+        self,
+        page_url: str,
+        *,
+        requested_from: str | None,
+        requested_to: str | None,
+    ) -> dict[str, object]:
+        payload = {
+            "startUrls": [{"url": page_url}],
+            "resultsLimit": self.posts_limit,
+        }
+        start_date = _format_date_param(requested_from)
+        end_date = _format_date_param(requested_to)
+        if start_date:
+            payload["startDate"] = start_date
+        if end_date:
+            payload["endDate"] = end_date
+        return payload
+
+    def _build_reels_payload(self, page_url: str) -> dict[str, object]:
+        return {
+            "startUrls": [{"url": page_url}],
+            "resultsLimit": self.reels_limit,
+        }
+
+    def _build_post_item(
+        self,
+        record: dict[str, object],
+        *,
+        brand_profile: dict[str, object],
+        requested_from: str | None,
+        requested_to: str | None,
+        seen_at: str,
+    ) -> dict[str, object] | None:
+        published_raw = _stringify_value(record.get("timestamp"))
+        if not is_between(published_raw, requested_from, requested_to):
+            return None
+        published_dt = parse_datetime(published_raw)
+        author = record.get("author") if isinstance(record.get("author"), dict) else {}
+        source_name = (
+            _stringify_value(author.get("name"))
+            or _stringify_value(record.get("pageName"))
+            or str(brand_profile.get("name") or "Facebook")
+        )
+        content_url = (
+            _stringify_value(record.get("url"))
+            or _stringify_value(record.get("postUrl"))
+            or _stringify_value(record.get("permalink"))
+        )
+        if not content_url:
+            return None
+        if "facebook.com/reel/" in content_url and "www.facebook.com/reel/" not in content_url:
+            content_url = content_url.replace("https://facebook.com/reel/", "https://www.facebook.com/reel/")
+        external_id = _stringify_value(record.get("postId")) or content_url
+        title = source_name
+        body_text = (
+            _stringify_value(record.get("postText"))
+            or _stringify_value(record.get("text"))
+            or _stringify_value(record.get("message"))
+        )
+        thumbnail_url = (
+            _stringify_value(record.get("image"))
+            or _stringify_value((record.get("author") or {}).get("profilePicture"))
+        )
+        return {
+            "platform": self.platform,
+            "source_kind": self.source_kind,
+            "content_type": "reel" if "/reel/" in content_url else "post",
+            "external_id": f"fbpost:{external_id}",
+            "source_name": source_name,
+            "author_name": _stringify_value(author.get("name")) or source_name,
+            "title": title,
+            "body_text": body_text,
+            "normalized_text": build_normalized_text(title, body_text, source_name),
+            "thumbnail_url": thumbnail_url,
+            "view_count": parse_count(record.get("views")),
+            "like_count": parse_count(record.get("reactionsCount") or record.get("likes")),
+            "dislike_count": None,
+            "comment_count": parse_count(record.get("commentsCount")),
+            "channel_subscriber_count": None,
+            "content_url": content_url,
+            "permalink": content_url,
+            "language": _stringify_value(record.get("language")),
+            "published_at": isoformat(published_dt) if published_dt else published_raw,
+            "first_seen_at": seen_at,
+            "last_seen_at": seen_at,
+            "raw_payload": {"source": "Apify Facebook Posts", "record": record},
+        }
+
+    def _build_reel_item(
+        self,
+        record: dict[str, object],
+        *,
+        brand_profile: dict[str, object],
+        requested_from: str | None,
+        requested_to: str | None,
+        seen_at: str,
+    ) -> dict[str, object] | None:
+        published_raw = (
+            _stringify_value(record.get("timestamp"))
+            or _stringify_value(record.get("date_posted"))
+            or _stringify_value(record.get("upload_date"))
+            or _stringify_value(record.get("time"))
+        )
+        if published_raw and not is_between(published_raw, requested_from, requested_to):
+            return None
+        published_dt = parse_datetime(published_raw) if published_raw else None
+        source_name = (
+            _stringify_value(record.get("channel"))
+            or _stringify_value(record.get("uploader"))
+            or _stringify_value(record.get("pageName"))
+            or str(brand_profile.get("name") or "Facebook")
+        )
+        content_url = (
+            _stringify_value(record.get("webpage_url"))
+            or _stringify_value(record.get("url"))
+            or _stringify_value(record.get("original_url"))
+            or _stringify_value(record.get("topLevelReelUrl"))
+        )
+        if not content_url:
+            return None
+        if "facebook.com/reel/" in content_url and "www.facebook.com/reel/" not in content_url:
+            content_url = content_url.replace("https://facebook.com/reel/", "https://www.facebook.com/reel/")
+        external_id = (
+            _stringify_value(record.get("post_id"))
+            or _stringify_value(record.get("id"))
+            or content_url
+        )
+        title = (
+            _stringify_value(record.get("title"))
+            or _stringify_value(record.get("caption"))
+            or source_name
+        )
+        body_text = (
+            _stringify_value(record.get("description"))
+            or _stringify_value(record.get("content"))
+            or _stringify_value(record.get("text"))
+        )
+        thumbnail_url = (
+            _stringify_value(record.get("thumbnail"))
+            or _stringify_value(record.get("thumbnail_url"))
+            or _stringify_value(record.get("image"))
+        )
+        return {
+            "platform": self.platform,
+            "source_kind": self.source_kind,
+            "content_type": "reel",
+            "external_id": f"fbreel:{external_id}",
+            "source_name": source_name,
+            "author_name": source_name,
+            "title": title,
+            "body_text": body_text,
+            "normalized_text": build_normalized_text(title, body_text, source_name),
+            "thumbnail_url": thumbnail_url,
+            "view_count": parse_count(record.get("view_count") or record.get("video_view_count") or record.get("plays")),
+            "like_count": parse_count(record.get("likes") or record.get("reactionsCount")),
+            "dislike_count": None,
+            "comment_count": parse_count(record.get("num_comments") or record.get("commentsCount")),
+            "channel_subscriber_count": None,
+            "content_url": content_url,
+            "permalink": content_url,
+            "language": _stringify_value(record.get("language")),
+            "published_at": isoformat(published_dt) if published_dt else published_raw,
+            "first_seen_at": seen_at,
+            "last_seen_at": seen_at,
+            "raw_payload": {"source": "Apify Facebook Reels", "record": record},
+        }
+
+    def collect(
+        self,
+        terms: list[str],
+        requested_from: str | None,
+        requested_to: str | None,
+        *,
+        brand_profile: dict[str, object] | None = None,
+    ) -> AdapterResult:
+        items: list[dict[str, object]] = []
+        warnings: list[str] = []
+        for result in self.collect_iter(
+            terms,
+            requested_from,
+            requested_to,
+            brand_profile=brand_profile,
+        ):
+            items.extend(result.items)
+            warnings.extend(result.warnings)
+        return AdapterResult(items=items, warnings=warnings)
+
+    def collect_iter(
+        self,
+        terms: list[str],
+        requested_from: str | None,
+        requested_to: str | None,
+        *,
+        brand_profile: dict[str, object] | None = None,
+    ):
+        if not self.token:
+            yield AdapterResult(items=[], warnings=[])
+            return
+
+        page_url = self._brand_page_url(brand_profile)
+        if not page_url:
+            yield AdapterResult(items=[], warnings=[])
+            return
+
+        seen_at = isoformat(utcnow())
+        for reels_records, reel_warnings in self._stream_actor_records(
+            self.reels_actor_id,
+            self._build_reels_payload(page_url),
+        ):
+            reel_items: list[dict[str, object]] = []
+            for record in reels_records:
+                item = self._build_reel_item(
+                    record,
+                    brand_profile=brand_profile or {},
+                    requested_from=requested_from,
+                    requested_to=requested_to,
+                    seen_at=seen_at,
+                )
+                if item:
+                    reel_items.append(item)
+            if reel_items or reel_warnings:
+                yield AdapterResult(items=reel_items, warnings=reel_warnings)
+            if any(_is_apify_quota_warning(message) for message in reel_warnings):
+                return
+
+        for posts_records, post_warnings in self._stream_actor_records(
+            self.posts_actor_id,
+            self._build_posts_payload(
+                page_url,
+                requested_from=requested_from,
+                requested_to=requested_to,
+            ),
+        ):
+            post_items: list[dict[str, object]] = []
+            for record in posts_records:
+                item = self._build_post_item(
+                    record,
+                    brand_profile=brand_profile or {},
+                    requested_from=requested_from,
+                    requested_to=requested_to,
+                    seen_at=seen_at,
+                )
+                if item:
+                    post_items.append(item)
+            if post_items or post_warnings:
+                yield AdapterResult(items=post_items, warnings=post_warnings)
+            if any(_is_apify_quota_warning(message) for message in post_warnings):
+                return
+
+
+class ExternalApiPlatformAdapter(BaseAdapter):
+    source_kind = "custom-api"
+
+    def __init__(
+        self,
+        *,
+        platform: str,
+        sources: list[dict[str, object]],
+    ) -> None:
+        self.platform = platform
+        self.sources = [
+            ExternalApiSourceConfig(
+                id=int(source["id"]),
+                name=str(source["name"]),
+                platform=str(source["platform"]),
+                method=str(source["method"]).upper(),
+                url_template=str(source["url_template"]),
+                headers=dict(source.get("headers") or {}),
+                body_template=_stringify_value(source.get("body_template")),
+                results_path=_stringify_value(source.get("results_path")),
+                field_mapping=dict(source.get("field_mapping") or {}),
+                pagination=dict(source.get("pagination") or {}),
+                is_enabled=bool(source.get("is_enabled")),
+            )
+            for source in sources
+            if source.get("is_enabled")
+        ]
+
+    def _perform_request(
+        self,
+        *,
+        source: ExternalApiSourceConfig,
+        terms: list[str],
+        requested_from: str | None,
+        requested_to: str | None,
+    ) -> tuple[list[dict[str, object]], list[str]]:
+        query_text = " OR ".join(terms) if terms else ""
+        raw_context = {
+            "query": query_text,
+            "from": requested_from or "",
+            "to": requested_to or "",
+        }
+        url_context = {
+            "query": quote_plus(query_text),
+            "from": quote_plus(requested_from or ""),
+            "to": quote_plus(requested_to or ""),
+        }
+        seen_at = isoformat(utcnow())
+        items: list[dict[str, object]] = []
+        warnings: list[str] = []
+        pagination = dict(source.pagination or {})
+        cursor_path = _stringify_value(pagination.get("cursor_path"))
+        inject_into = (_stringify_value(pagination.get("inject_into")) or "query").lower()
+        param_name = _stringify_value(pagination.get("param_name")) or "cursor"
+        max_pages = max(1, parse_count(pagination.get("max_pages")) or 1)
+        auto_cursor_pagination = not pagination and source.method == "GET"
+        if auto_cursor_pagination:
+            max_pages = 5
+        current_cursor: str | None = None
+        seen_cursors: set[str] = set()
+
+        for page_index in range(max_pages):
+            final_url = _apply_template_string(source.url_template, url_context)
+            headers = _apply_template_payload(source.headers, raw_context)
+            request_headers = {str(key): str(value) for key, value in (headers or {}).items()}
+            rendered_body: object | None = None
+
+            parsed_url = urlparse(final_url)
+            existing_query = dict(parse_qsl(parsed_url.query, keep_blank_values=True))
+            if (
+                source.platform == "facebook"
+                and "facebook-scraper3.p.rapidapi.com" in parsed_url.netloc
+                and parsed_url.path == "/search/posts"
+            ):
+                facebook_params: dict[str, str] = {}
+                from_date = _format_date_param(requested_from)
+                to_date = _format_date_param(requested_to)
+                if (requested_from or requested_to) and "recent_posts" not in existing_query:
+                    facebook_params["recent_posts"] = "true"
+                if from_date and "start_date" not in existing_query:
+                    facebook_params["start_date"] = from_date
+                if to_date and "end_date" not in existing_query:
+                    facebook_params["end_date"] = to_date
+                if facebook_params:
+                    final_url = _append_query_params(final_url, facebook_params)
+                    parsed_url = urlparse(final_url)
+                    existing_query = dict(parse_qsl(parsed_url.query, keep_blank_values=True))
+
+            if source.method == "POST" and source.body_template:
+                try:
+                    parsed_body = json.loads(source.body_template)
+                except json.JSONDecodeError:
+                    return [], [f"{source.name}: body JSON gecersiz."]
+                rendered_body = _apply_template_payload(parsed_body, raw_context)
+
+            if current_cursor:
+                if inject_into == "body":
+                    if rendered_body is None:
+                        rendered_body = {}
+                    if not isinstance(rendered_body, dict):
+                        warnings.append(f"{source.name}: cursor sadece obje body ile calisir.")
+                        break
+                    rendered_body[param_name] = current_cursor
+                else:
+                    final_url = _append_query_params(final_url, {param_name: current_cursor})
+
+            request_data: bytes | None = None
+            if source.method == "POST":
+                request_headers.setdefault("Content-Type", "application/json")
+                if rendered_body is not None:
+                    request_data = json.dumps(rendered_body, ensure_ascii=False).encode("utf-8")
+
+            try:
+                request = Request(
+                    final_url,
+                    data=request_data,
+                    headers=request_headers,
+                    method=source.method,
+                )
+                with urlopen(request, timeout=25) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+            except HTTPError as exc:
+                warnings.append(f"{source.name}: API cagrisi basarisiz ({exc.code}).")
+                break
+            except URLError as exc:
+                warnings.append(f"{source.name}: baglanti hatasi ({exc.reason}).")
+                break
+            except json.JSONDecodeError:
+                warnings.append(f"{source.name}: JSON cevabi okunamadi.")
+                break
+
+            if auto_cursor_pagination and not cursor_path and isinstance(payload, dict) and payload.get("cursor"):
+                cursor_path = "cursor"
+                inject_into = "query"
+                param_name = "cursor"
+
+            records = _resolve_path(payload, source.results_path) if source.results_path else payload
+            if isinstance(records, dict):
+                records = [records]
+            if not isinstance(records, list):
+                warnings.append(f"{source.name}: sonuc yolu liste dondurmuyor.")
+                break
+
+            for index, record in enumerate(records):
+                if not isinstance(record, dict):
+                    continue
+
+                mapped = {
+                    key: _extract_mapped_value(record, mapping_value)
+                    for key, mapping_value in source.field_mapping.items()
+                }
+                title = _stringify_value(mapped.get("title"))
+                body_text = _stringify_value(mapped.get("body_text"))
+                source_name = _stringify_value(mapped.get("source_name")) or source.name
+                author_name = _stringify_value(mapped.get("author_name")) or source_name
+                content_url = _stringify_value(mapped.get("content_url")) or _stringify_value(mapped.get("permalink")) or final_url
+                permalink = _stringify_value(mapped.get("permalink")) or content_url
+                published_at_raw = _stringify_value(mapped.get("published_at"))
+                if not is_between(published_at_raw, requested_from, requested_to):
+                    continue
+                published_at_dt = parse_datetime(published_at_raw)
+                published_at = isoformat(published_at_dt) if published_at_dt else published_at_raw
+
+                external_id = _stringify_value(mapped.get("external_id"))
+                if not external_id:
+                    digest = hashlib.sha1(
+                        json.dumps(record, ensure_ascii=False, sort_keys=True).encode("utf-8")
+                    ).hexdigest()
+                    external_id = f"{source.id}-{page_index}-{index}-{digest[:16]}"
+
+                items.append(
+                    {
+                        "platform": self.platform,
+                        "source_kind": self.source_kind,
+                        "content_type": _stringify_value(mapped.get("content_type")) or "post",
+                        "external_id": external_id,
+                        "source_name": source_name,
+                        "author_name": author_name,
+                        "title": title,
+                        "body_text": body_text,
+                        "normalized_text": build_normalized_text(title, body_text, source_name, author_name),
+                        "thumbnail_url": _stringify_value(mapped.get("thumbnail_url")),
+                        "view_count": parse_count(mapped.get("view_count")),
+                        "like_count": parse_count(mapped.get("like_count")),
+                        "dislike_count": parse_count(mapped.get("dislike_count")),
+                        "comment_count": parse_count(mapped.get("comment_count")),
+                        "channel_subscriber_count": parse_count(mapped.get("channel_subscriber_count")),
+                        "content_url": content_url,
+                        "permalink": permalink,
+                        "language": _stringify_value(mapped.get("language")),
+                        "published_at": published_at,
+                        "first_seen_at": seen_at,
+                        "last_seen_at": seen_at,
+                        "raw_payload": {"source": source.name, "record": record, "page": page_index + 1},
+                    }
+                )
+
+            if not cursor_path or page_index + 1 >= max_pages:
+                break
+
+            next_cursor = _stringify_value(_resolve_path(payload, cursor_path))
+            if not next_cursor or next_cursor in seen_cursors:
+                break
+            seen_cursors.add(next_cursor)
+            current_cursor = next_cursor
+
+        return items, warnings
+
+    def _perform_official_facebook_request(
+        self,
+        *,
+        source: ExternalApiSourceConfig,
+        brand_profile: dict[str, object] | None,
+        requested_from: str | None,
+        requested_to: str | None,
+    ) -> tuple[list[dict[str, object]], list[str]]:
+        if self.platform != "facebook" or not brand_profile:
+            return [], []
+
+        raw_url = str(brand_profile.get("official_facebook_url") or "").strip()
+        if not raw_url:
+            return [], []
+
+        markers = _extract_facebook_page_markers(raw_url)
+        official_query = markers.get("slug") or normalize_text(str(brand_profile.get("name") or "")).replace(" ", "")
+        if not official_query:
+            return [], ["facebook resmi sayfa: linkten sayfa bilgisi cozumlenemedi."]
+
+        source_items, source_warnings = self._perform_request(
+            source=source,
+            terms=[official_query],
+            requested_from=requested_from,
+            requested_to=requested_to,
+        )
+
+        filtered_items: list[dict[str, object]] = []
+        for item in source_items:
+            raw_record = ((item.get("raw_payload") or {}).get("record") or {})
+            if not isinstance(raw_record, dict):
+                continue
+            if not _facebook_author_matches(raw_record, brand_profile):
+                continue
+            official_item = dict(item)
+            official_item["source_kind"] = "owned-page"
+            filtered_items.append(official_item)
+
+        return filtered_items, source_warnings
+
+    def _mark_matching_official_facebook_items(
+        self,
+        items: list[dict[str, object]],
+        brand_profile: dict[str, object] | None,
+    ) -> list[dict[str, object]]:
+        if self.platform != "facebook" or not brand_profile:
+            return items
+
+        marked_items: list[dict[str, object]] = []
+        for item in items:
+            raw_record = ((item.get("raw_payload") or {}).get("record") or {})
+            if isinstance(raw_record, dict) and _facebook_author_matches(raw_record, brand_profile):
+                official_item = dict(item)
+                official_item["source_kind"] = "owned-page"
+                marked_items.append(official_item)
+            else:
+                marked_items.append(item)
+        return marked_items
+
+    def collect(
+        self,
+        terms: list[str],
+        requested_from: str | None,
+        requested_to: str | None,
+        *,
+        brand_profile: dict[str, object] | None = None,
+    ) -> AdapterResult:
+        items: list[dict[str, object]] = []
+        warnings: list[str] = []
+        for source in self.sources:
+            source_items, source_warnings = self._perform_request(
+                source=source,
+                terms=terms,
+                requested_from=requested_from,
+                requested_to=requested_to,
+            )
+            source_items = self._mark_matching_official_facebook_items(source_items, brand_profile)
+            items.extend(source_items)
+            warnings.extend(source_warnings)
+            official_items, official_warnings = self._perform_official_facebook_request(
+                source=source,
+                brand_profile=brand_profile,
+                requested_from=requested_from,
+                requested_to=requested_to,
+            )
+            items.extend(official_items)
+            warnings.extend(official_warnings)
+        return AdapterResult(items=items, warnings=warnings)
+
+
 class StubPlatformAdapter(BaseAdapter):
     def __init__(self, platform: str, message: str) -> None:
         self.platform = platform
@@ -1168,16 +2380,15 @@ def available_platforms() -> list[str]:
 
 
 def build_adapters(settings: Settings) -> dict[str, BaseAdapter]:
-    return {
-        "facebook": StubPlatformAdapter(
-            "facebook",
-            "gercek connector henuz bagli degil; resmi API veya vendor adaptor gerekecek.",
-        ),
-        "instagram": StubPlatformAdapter(
-            "instagram",
-            "gercek connector henuz bagli degil; hashtag veya tracked source odakli adaptor gerekecek.",
-        ),
-        "youtube": YouTubeAdapter(
+    external_sources = list_external_api_sources(enabled_only=True)
+    sources_by_platform: dict[str, list[dict[str, object]]] = {platform: [] for platform in available_platforms()}
+    for source in external_sources:
+        platform = str(source.get("platform") or "").strip().lower()
+        if platform in sources_by_platform:
+            sources_by_platform[platform].append(source)
+
+    youtube_adapters: list[BaseAdapter] = [
+        YouTubeAdapter(
             api_key=settings.youtube_api_key,
             owned_channels_path=settings.owned_youtube_channels_path,
             target_language=settings.target_language,
@@ -1187,8 +2398,59 @@ def build_adapters(settings: Settings) -> dict[str, BaseAdapter]:
             max_pages=settings.youtube_max_pages,
             fetch_comments=settings.youtube_fetch_comments,
             comment_threads_per_video=settings.youtube_comment_threads_per_video,
+        )
+    ]
+    if sources_by_platform["youtube"]:
+        youtube_adapters.append(
+            ExternalApiPlatformAdapter(
+                platform="youtube",
+                sources=sources_by_platform["youtube"],
+            )
+        )
+
+    facebook_adapters: list[BaseAdapter] = []
+    if settings.apify_token:
+        facebook_adapters.append(
+            ApifyFacebookOfficialAdapter(
+                token=settings.apify_token,
+                posts_actor_id=settings.apify_facebook_posts_actor_id,
+                reels_actor_id=settings.apify_facebook_reels_actor_id,
+                posts_limit=settings.apify_facebook_posts_limit,
+                reels_limit=settings.apify_facebook_reels_limit,
+            )
+        )
+        facebook_adapters.append(
+            ApifyFacebookSearchAdapter(
+                token=settings.apify_token,
+                actor_id=settings.apify_facebook_search_actor_id,
+                results_limit=settings.apify_facebook_search_limit,
+            )
+        )
+    if sources_by_platform["facebook"] and not settings.apify_token:
+        facebook_adapters.append(
+            ExternalApiPlatformAdapter(
+                platform="facebook",
+                sources=sources_by_platform["facebook"],
+            )
+        )
+
+    return {
+        "facebook": CompositeAdapter("facebook", facebook_adapters) if facebook_adapters else StubPlatformAdapter(
+            "facebook",
+            "gercek connector henuz bagli degil; resmi API veya vendor adaptor gerekecek.",
         ),
-        "linkedin": StubPlatformAdapter(
+        "instagram": ExternalApiPlatformAdapter(
+            platform="instagram",
+            sources=sources_by_platform["instagram"],
+        ) if sources_by_platform["instagram"] else StubPlatformAdapter(
+            "instagram",
+            "gercek connector henuz bagli degil; hashtag veya tracked source odakli adaptor gerekecek.",
+        ),
+        "youtube": CompositeAdapter("youtube", youtube_adapters),
+        "linkedin": ExternalApiPlatformAdapter(
+            platform="linkedin",
+            sources=sources_by_platform["linkedin"],
+        ) if sources_by_platform["linkedin"] else StubPlatformAdapter(
             "linkedin",
             "gercek connector henuz bagli degil; owned company page veya vendor adaptor gerekecek.",
         ),

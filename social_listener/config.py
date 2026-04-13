@@ -67,6 +67,14 @@ class Settings:
     target_language: str
     target_region: str
     strict_language_filter: bool
+    show_api_source_ui: bool
+    apify_token: str | None
+    apify_facebook_search_actor_id: str
+    apify_facebook_posts_actor_id: str
+    apify_facebook_reels_actor_id: str
+    apify_facebook_search_limit: int
+    apify_facebook_posts_limit: int
+    apify_facebook_reels_limit: int
     youtube_api_key: str | None
     youtube_max_results: int
     youtube_max_pages: int
@@ -95,6 +103,23 @@ def load_settings() -> Settings:
         target_language=os.getenv("APP_TARGET_LANGUAGE", "tr").strip() or "tr",
         target_region=os.getenv("APP_TARGET_REGION", "TR").strip().upper() or "TR",
         strict_language_filter=_env_bool("APP_STRICT_LANGUAGE_FILTER", True),
+        show_api_source_ui=_env_bool("APP_SHOW_API_SOURCE_UI", False),
+        apify_token=(os.getenv("APIFY_TOKEN") or "").strip() or None,
+        apify_facebook_search_actor_id=(
+            os.getenv("APIFY_FACEBOOK_SEARCH_ACTOR_ID", "scraper_one/facebook-posts-search").strip()
+            or "scraper_one/facebook-posts-search"
+        ),
+        apify_facebook_posts_actor_id=(
+            os.getenv("APIFY_FACEBOOK_POSTS_ACTOR_ID", "apify/facebook-posts-scraper").strip()
+            or "apify/facebook-posts-scraper"
+        ),
+        apify_facebook_reels_actor_id=(
+            os.getenv("APIFY_FACEBOOK_REELS_ACTOR_ID", "apify/facebook-reels-scraper").strip()
+            or "apify/facebook-reels-scraper"
+        ),
+        apify_facebook_search_limit=_env_int("APIFY_FACEBOOK_SEARCH_LIMIT", 50),
+        apify_facebook_posts_limit=_env_int("APIFY_FACEBOOK_POSTS_LIMIT", 25),
+        apify_facebook_reels_limit=_env_int("APIFY_FACEBOOK_REELS_LIMIT", 25),
         youtube_api_key=os.getenv("YOUTUBE_API_KEY") or None,
         youtube_max_results=_env_int("YOUTUBE_MAX_RESULTS", 12),
         youtube_max_pages=_env_int("YOUTUBE_MAX_PAGES", 1),

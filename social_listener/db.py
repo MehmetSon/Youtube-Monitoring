@@ -43,10 +43,27 @@ CREATE TABLE IF NOT EXISTS brand_profiles (
     query_text TEXT NOT NULL,
     platforms_json TEXT NOT NULL,
     official_youtube_url TEXT,
+    official_facebook_url TEXT,
     requested_from TEXT,
     requested_to TEXT,
     last_result_count INTEGER NOT NULL DEFAULT 0,
     last_opened_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS external_api_sources (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    platform TEXT NOT NULL,
+    method TEXT NOT NULL DEFAULT 'GET',
+    url_template TEXT NOT NULL,
+    headers_json TEXT NOT NULL DEFAULT '{}',
+    body_template TEXT,
+    results_path TEXT,
+    field_mapping_json TEXT NOT NULL,
+    pagination_json TEXT NOT NULL DEFAULT '{}',
+    is_enabled INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -116,10 +133,27 @@ CREATE TABLE IF NOT EXISTS brand_profiles (
     query_text TEXT NOT NULL,
     platforms_json TEXT NOT NULL,
     official_youtube_url TEXT,
+    official_facebook_url TEXT,
     requested_from TEXT,
     requested_to TEXT,
     last_result_count INTEGER NOT NULL DEFAULT 0,
     last_opened_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS external_api_sources (
+    id BIGSERIAL PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    platform TEXT NOT NULL,
+    method TEXT NOT NULL DEFAULT 'GET',
+    url_template TEXT NOT NULL,
+    headers_json TEXT NOT NULL DEFAULT '{}',
+    body_template TEXT,
+    results_path TEXT,
+    field_mapping_json TEXT NOT NULL,
+    pagination_json TEXT NOT NULL DEFAULT '{}',
+    is_enabled BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -160,6 +194,8 @@ CREATE INDEX IF NOT EXISTS idx_content_last_seen_at ON content_items(last_seen_a
 
 POSTGRES_MIGRATIONS = """
 ALTER TABLE brand_profiles ADD COLUMN IF NOT EXISTS official_youtube_url TEXT;
+ALTER TABLE brand_profiles ADD COLUMN IF NOT EXISTS official_facebook_url TEXT;
+ALTER TABLE external_api_sources ADD COLUMN IF NOT EXISTS pagination_json TEXT NOT NULL DEFAULT '{}';
 ALTER TABLE content_items ADD COLUMN IF NOT EXISTS thumbnail_url TEXT;
 ALTER TABLE content_items ADD COLUMN IF NOT EXISTS view_count INTEGER;
 ALTER TABLE content_items ADD COLUMN IF NOT EXISTS like_count INTEGER;
@@ -269,8 +305,13 @@ def init_schema() -> None:
         db.executescript(SQLITE_SCHEMA)
         columns = {row["name"] for row in db.execute("PRAGMA table_info(content_items)").fetchall()}
         brand_columns = {row["name"] for row in db.execute("PRAGMA table_info(brand_profiles)").fetchall()}
+        source_columns = {row["name"] for row in db.execute("PRAGMA table_info(external_api_sources)").fetchall()}
         if "official_youtube_url" not in brand_columns:
             db.execute("ALTER TABLE brand_profiles ADD COLUMN official_youtube_url TEXT")
+        if "official_facebook_url" not in brand_columns:
+            db.execute("ALTER TABLE brand_profiles ADD COLUMN official_facebook_url TEXT")
+        if "pagination_json" not in source_columns:
+            db.execute("ALTER TABLE external_api_sources ADD COLUMN pagination_json TEXT NOT NULL DEFAULT '{}'")
         if "thumbnail_url" not in columns:
             db.execute("ALTER TABLE content_items ADD COLUMN thumbnail_url TEXT")
         if "view_count" not in columns:

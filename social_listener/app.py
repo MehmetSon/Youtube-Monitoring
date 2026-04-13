@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
 import logging
 from threading import Lock
+from threading import Thread
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from flask import Flask, jsonify, render_template, request
@@ -13,14 +16,19 @@ from .config import load_settings
 from .db import INTEGRITY_ERRORS, close_db, init_schema
 from .repository import (
     create_brand_profile,
+    create_external_api_source,
     delete_brand_profile,
+    delete_external_api_source,
     ensure_default_brand_profiles,
+    list_external_api_sources,
     list_brand_profiles,
+    set_external_api_source_enabled,
     set_item_read_state,
     touch_brand_profile,
     update_brand_profile,
 )
 from .services import CollectionService
+from .services.adapters import available_platforms
 
 
 def _normalize_datetime(raw_value: str | None, timezone_name: str) -> str | None:
@@ -54,6 +62,25 @@ def _coerce_platform_list(raw_value: object, *, fallback: list[str] | None = Non
     return [item for item in items if item]
 
 
+def _coerce_bool(raw_value: object, default: bool = True) -> bool:
+    if raw_value is None:
+        return default
+    if isinstance(raw_value, bool):
+        return raw_value
+    return str(raw_value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _parse_json_payload(raw_value: object, *, fallback: object) -> object:
+    if raw_value is None:
+        return fallback
+    if isinstance(raw_value, (dict, list)):
+        return raw_value
+    text = str(raw_value).strip()
+    if not text:
+        return fallback
+    return json.loads(text)
+
+
 def create_app() -> Flask:
     settings = load_settings()
     app = Flask(
@@ -67,6 +94,8 @@ def create_app() -> Flask:
     app.logger.setLevel(logging.INFO)
     init_lock = Lock()
     init_state = {"ready": False}
+    collect_jobs: dict[str, dict[str, object]] = {}
+    collect_jobs_lock = Lock()
 
     app.teardown_appcontext(close_db)
 
@@ -97,11 +126,16 @@ def create_app() -> Flask:
         return render_template(
             "index.html",
             demo_enabled=settings.enable_demo_data,
+            show_api_source_ui=settings.show_api_source_ui,
         )
 
     @app.get("/api/brands")
     def brands() -> tuple[object, int]:
         return jsonify({"items": list_brand_profiles()}), 200
+
+    @app.get("/api/api-sources")
+    def api_sources() -> tuple[object, int]:
+        return jsonify({"items": list_external_api_sources()}), 200
 
     @app.post("/api/brands")
     def create_brand() -> tuple[object, int]:
@@ -109,6 +143,7 @@ def create_app() -> Flask:
         name = (payload.get("name") or "").strip()
         query_text = (payload.get("query") or "").strip()
         official_youtube_url = (payload.get("official_youtube_url") or "").strip() or None
+        official_facebook_url = (payload.get("official_facebook_url") or "").strip() or None
         if not name:
             return jsonify({"error": "Marka adi zorunlu."}), 400
         if not query_text:
@@ -123,6 +158,7 @@ def create_app() -> Flask:
                 query_text=query_text,
                 platforms=platform_list,
                 official_youtube_url=official_youtube_url,
+                official_facebook_url=official_facebook_url,
                 requested_from=requested_from,
                 requested_to=requested_to,
             )
@@ -130,12 +166,66 @@ def create_app() -> Flask:
             return jsonify({"error": "Bu marka adi zaten var."}), 409
         return jsonify(brand), 201
 
+    @app.post("/api/api-sources")
+    def create_api_source() -> tuple[object, int]:
+        payload = request.get_json(silent=True) or request.form
+        name = (payload.get("name") or "").strip()
+        platform = (payload.get("platform") or "").strip().lower()
+        method = (payload.get("method") or "GET").strip().upper()
+        url_template = (payload.get("url_template") or "").strip()
+        body_template = (payload.get("body_template") or "").strip() or None
+        results_path = (payload.get("results_path") or "").strip() or None
+        is_enabled = _coerce_bool(payload.get("is_enabled"), True)
+
+        if not name:
+            return jsonify({"error": "Kaynak adi zorunlu."}), 400
+        if platform not in available_platforms():
+            return jsonify({"error": "Gecersiz platform."}), 400
+        if method not in {"GET", "POST"}:
+            return jsonify({"error": "Sadece GET veya POST destekleniyor."}), 400
+        if not url_template:
+            return jsonify({"error": "Endpoint URL zorunlu."}), 400
+
+        try:
+            headers = _parse_json_payload(payload.get("headers_json"), fallback={})
+            field_mapping = _parse_json_payload(payload.get("field_mapping_json"), fallback={})
+            pagination = _parse_json_payload(payload.get("pagination_json"), fallback={})
+        except json.JSONDecodeError:
+            return jsonify({"error": "JSON alanlarinda gecersiz format var."}), 400
+
+        if not isinstance(headers, dict):
+            return jsonify({"error": "Header JSON bir obje olmali."}), 400
+        if not isinstance(field_mapping, dict):
+            return jsonify({"error": "Alan esleme JSON bir obje olmali."}), 400
+        if not isinstance(pagination, dict):
+            return jsonify({"error": "Sayfalama JSON bir obje olmali."}), 400
+        if not field_mapping.get("external_id") and not field_mapping.get("content_url") and not field_mapping.get("permalink"):
+            return jsonify({"error": "Alan eslemede en az external_id veya content_url/permalink tanimlayin."}), 400
+
+        try:
+            source = create_external_api_source(
+                name=name,
+                platform=platform,
+                method=method,
+                url_template=url_template,
+                headers=headers,
+                body_template=body_template,
+                results_path=results_path,
+                field_mapping=field_mapping,
+                pagination=pagination,
+                is_enabled=is_enabled,
+            )
+        except INTEGRITY_ERRORS:
+            return jsonify({"error": "Bu kaynak adi zaten var."}), 409
+        return jsonify(source), 201
+
     @app.patch("/api/brands/<int:brand_id>")
     def update_brand(brand_id: int) -> tuple[object, int]:
         payload = request.get_json(silent=True) or request.form
         name = (payload.get("name") or "").strip()
         query_text = (payload.get("query") or "").strip()
         official_youtube_url = (payload.get("official_youtube_url") or "").strip() or None
+        official_facebook_url = (payload.get("official_facebook_url") or "").strip() or None
         if not name:
             return jsonify({"error": "Marka adi zorunlu."}), 400
         if not query_text:
@@ -151,6 +241,7 @@ def create_app() -> Flask:
                 query_text=query_text,
                 platforms=platform_list,
                 official_youtube_url=official_youtube_url,
+                official_facebook_url=official_facebook_url,
                 requested_from=requested_from,
                 requested_to=requested_to,
             )
@@ -160,12 +251,30 @@ def create_app() -> Flask:
             return jsonify({"error": "Marka bulunamadi."}), 404
         return jsonify(brand), 200
 
+    @app.patch("/api/api-sources/<int:source_id>")
+    def update_api_source(source_id: int) -> tuple[object, int]:
+        payload = request.get_json(silent=True) or request.form
+        if "is_enabled" not in payload:
+            return jsonify({"error": "is_enabled alani zorunlu."}), 400
+
+        source = set_external_api_source_enabled(source_id, _coerce_bool(payload.get("is_enabled"), True))
+        if source is None:
+            return jsonify({"error": "API kaynagi bulunamadi."}), 404
+        return jsonify(source), 200
+
     @app.delete("/api/brands/<int:brand_id>")
     def delete_brand(brand_id: int) -> tuple[object, int]:
         deleted = delete_brand_profile(brand_id)
         if not deleted:
             return jsonify({"error": "Marka bulunamadi."}), 404
         return jsonify({"ok": True, "id": brand_id}), 200
+
+    @app.delete("/api/api-sources/<int:source_id>")
+    def delete_api_source(source_id: int) -> tuple[object, int]:
+        deleted = delete_external_api_source(source_id)
+        if not deleted:
+            return jsonify({"error": "API kaynagi bulunamadi."}), 404
+        return jsonify({"ok": True, "id": source_id}), 200
 
     @app.get("/health")
     def health() -> tuple[dict[str, object], int]:
@@ -190,6 +299,71 @@ def create_app() -> Flask:
         requested_to = _normalize_datetime(payload.get("to"), settings.app_timezone)
         raw_brand_id = payload.get("brand_id")
         brand_id = int(raw_brand_id) if str(raw_brand_id).strip().isdigit() else None
+        background = _coerce_bool(payload.get("background"), False)
+
+        if background:
+            job_id = uuid4().hex
+            with collect_jobs_lock:
+                collect_jobs[job_id] = {
+                    "id": job_id,
+                    "status": "queued",
+                    "query": raw_query,
+                    "platforms": platform_list,
+                    "requested_from": requested_from,
+                    "requested_to": requested_to,
+                    "brand_id": brand_id,
+                    "batches_completed": 0,
+                    "items_written": 0,
+                    "warnings": [],
+                    "summary": {},
+                    "error": None,
+                }
+
+            def run_background_collection() -> None:
+                with collect_jobs_lock:
+                    collect_jobs[job_id]["status"] = "running"
+
+                def on_batch(batch: dict[str, object]) -> None:
+                    with collect_jobs_lock:
+                        job = collect_jobs.get(job_id)
+                        if not job:
+                            return
+                        job["batches_completed"] = int(job.get("batches_completed", 0)) + 1
+                        job["items_written"] = batch.get("total_written", job.get("items_written", 0))
+                        existing_warnings = list(job.get("warnings") or [])
+                        existing_warnings.extend(batch.get("warnings") or [])
+                        job["warnings"] = existing_warnings
+
+                try:
+                    with app.app_context():
+                        ensure_data_store_ready()
+                        service = CollectionService(settings)
+                        result = service.collect_progressive(
+                            raw_query=raw_query,
+                            platforms=platform_list,
+                            requested_from=requested_from,
+                            requested_to=requested_to,
+                            brand_id=brand_id,
+                            on_batch=on_batch,
+                        )
+                        if brand_id is not None:
+                            touch_brand_profile(brand_id)
+                    with collect_jobs_lock:
+                        job = collect_jobs.get(job_id)
+                        if job:
+                            job["status"] = "completed"
+                            job["summary"] = result.get("summary", {})
+                            job["warnings"] = result.get("warnings", [])
+                except Exception as exc:  # pragma: no cover - runtime safety
+                    app.logger.exception("Arka plan toplama basarisiz.")
+                    with collect_jobs_lock:
+                        job = collect_jobs.get(job_id)
+                        if job:
+                            job["status"] = "failed"
+                            job["error"] = str(exc)
+
+            Thread(target=run_background_collection, daemon=True).start()
+            return jsonify({"ok": True, "job_id": job_id, "status": "queued"}), 202
 
         service = CollectionService(settings)
         result = service.collect(
@@ -202,6 +376,14 @@ def create_app() -> Flask:
         if brand_id is not None:
             touch_brand_profile(brand_id)
         return jsonify(result), 200
+
+    @app.get("/api/collect/<job_id>")
+    def collect_status(job_id: str) -> tuple[object, int]:
+        with collect_jobs_lock:
+            job = collect_jobs.get(job_id)
+            if not job:
+                return jsonify({"error": "Toplama isi bulunamadi."}), 404
+            return jsonify(job), 200
 
     @app.get("/api/search")
     def search() -> tuple[object, int]:
