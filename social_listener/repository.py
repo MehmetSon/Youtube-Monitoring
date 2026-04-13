@@ -716,8 +716,12 @@ def search_content(
             if variant_clauses:
                 term_clauses.append("(" + " OR ".join(variant_clauses) + ")")
         if term_clauses:
-            owned_clause = "(source_kind LIKE 'owned-%')" if "source_kind" in available_columns else "0 = 1"
-            where_parts.append("(" + owned_clause + " OR (" + " OR ".join(term_clauses) + "))")
+            match_clause = "(" + " OR ".join(term_clauses) + ")"
+            if "source_kind" in available_columns:
+                where_parts.append("(" + match_clause + " OR source_kind LIKE ?)")
+                params.append("owned-%")
+            else:
+                where_parts.append(match_clause)
 
     if platforms and "platform" in available_columns:
         placeholders = ", ".join(["?"] * len(platforms))
