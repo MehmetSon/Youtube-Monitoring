@@ -209,7 +209,7 @@ ALTER TABLE content_items ADD COLUMN IF NOT EXISTS read_at TEXT;
 
 def _convert_query(query: str, backend: str) -> str:
     if backend == "postgres":
-        return query.replace("?", "%s")
+        return query.replace("%", "%%").replace("?", "%s")
     return query
 
 
