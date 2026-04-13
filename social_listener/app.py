@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 from threading import Lock
 from threading import Thread
 from datetime import datetime, timezone
@@ -410,7 +411,14 @@ def create_app() -> Flask:
             return jsonify(result), 200
         except Exception:  # pragma: no cover - runtime safety
             app.logger.exception("Arama basarisiz.")
-            return jsonify({"error": "Arama gecici olarak kullanilamiyor. Lutfen biraz sonra tekrar deneyin."}), 500
+            exc = sys.exc_info()[1]
+            detail = f"{type(exc).__name__}: {exc}" if exc else "Bilinmeyen hata"
+            return jsonify(
+                {
+                    "error": "Arama gecici olarak kullanilamiyor. Lutfen biraz sonra tekrar deneyin.",
+                    "detail": detail,
+                }
+            ), 500
 
     @app.post("/api/items/<int:item_id>/read")
     def update_read_state(item_id: int) -> tuple[object, int]:
