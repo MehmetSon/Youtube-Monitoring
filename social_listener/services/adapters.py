@@ -105,13 +105,13 @@ def extract_thumbnail_url(thumbnails: dict[str, object] | None) -> str | None:
 def fold_for_match(value: str | None) -> str:
     if not value:
         return ""
-    unescaped = html.unescape(value)
+    unescaped = html.unescape(str(value))
     return normalize_text(unescaped).translate(TURKISH_ASCII_MAP)
 
 
 def build_match_text(item: dict[str, object]) -> str:
     return " ".join(
-        part
+        str(part)
         for part in [
             item.get("title") or "",
             item.get("body_text") or "",
@@ -307,7 +307,7 @@ def iter_chunks(values: list[str], chunk_size: int) -> list[list[str]]:
 def _language_matches(value: str | None, target_language: str) -> bool:
     if not value:
         return False
-    cleaned = value.strip().lower()
+    cleaned = str(value).strip().lower()
     target = target_language.strip().lower()
     return cleaned == target or cleaned.startswith(f"{target}-")
 

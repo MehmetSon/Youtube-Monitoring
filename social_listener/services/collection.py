@@ -285,28 +285,38 @@ class CollectionService:
         if self.settings.strict_language_filter:
             filtered_rows = []
             for row in rows:
-                source_kind = str(row.get("source_kind") or "")
-                if source_kind.startswith("owned-"):
-                    filtered_rows.append(row)
+                try:
+                    source_kind = str(row.get("source_kind") or "")
+                    if source_kind.startswith("owned-"):
+                        filtered_rows.append(row)
+                        continue
+                    text = " ".join(
+                        str(part)
+                        for part in [
+                            row.get("title") or "",
+                            row.get("body_text") or "",
+                            row.get("source_name") or "",
+                        ]
+                        if part
+                    )
+                    if matches_target_language(
+                        language=row.get("language"),
+                        text=text,
+                        target_language=self.settings.target_language,
+                    ):
+                        filtered_rows.append(row)
+                except Exception:
                     continue
-                text = " ".join(
-                    part
-                    for part in [
-                        row.get("title") or "",
-                        row.get("body_text") or "",
-                        row.get("source_name") or "",
-                    ]
-                    if part
-                )
-                if matches_target_language(
-                    language=row.get("language"),
-                    text=text,
-                    target_language=self.settings.target_language,
-                ):
-                    filtered_rows.append(row)
             rows = filtered_rows
 
-        rows = [row for row in rows if item_matches_terms(row, terms)]
+        safe_rows = []
+        for row in rows:
+            try:
+                if item_matches_terms(row, terms):
+                    safe_rows.append(row)
+            except Exception:
+                continue
+        rows = safe_rows
         return {
             "terms": terms,
             "count": len(rows),
